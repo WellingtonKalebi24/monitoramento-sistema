@@ -533,6 +533,13 @@ button.danger {
   color: #dbeafe;
 }
 
+.rtmp-box small {
+  color: #bfdbfe;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
 .recognition-note {
   margin: 0 0 16px;
 }

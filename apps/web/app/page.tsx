@@ -166,6 +166,7 @@ const aiUrl = normalizedBaseUrl(
   process.env.NEXT_PUBLIC_AI_URL ??
     (process.env.NODE_ENV === "production" ? "/ai" : "http://localhost:8000")
 );
+const rtmpHost = process.env.NEXT_PUBLIC_RTMP_HOST;
 const rtmpPort = process.env.NEXT_PUBLIC_RTMP_PORT ?? "1935";
 
 async function fileToDataUrl(file: File) {
@@ -197,18 +198,29 @@ function isVideoPreview(url?: string | null) {
   return Boolean(url && /\.(mp4|webm|mov)(\?|$)/i.test(url));
 }
 
-function rtmpPublishUrl(camera: Camera) {
+function rtmpStreamKey(camera: Camera) {
   if (camera.sourceType !== "rtmp" || !camera.rtspUrl) {
     return null;
   }
 
-  const streamKey = camera.rtspUrl.split("/").filter(Boolean).at(-1);
+  return camera.rtspUrl.split("/").filter(Boolean).at(-1) ?? null;
+}
+
+function rtmpPublishInfo(camera: Camera) {
+  const streamKey = rtmpStreamKey(camera);
+
   if (!streamKey) {
     return null;
   }
 
-  const host = typeof window === "undefined" ? "localhost" : window.location.hostname;
-  return `rtmp://${host}:${rtmpPort}/live/${streamKey}`;
+  const host = rtmpHost || (typeof window === "undefined" ? "localhost" : window.location.hostname);
+  const serverUrl = `rtmp://${host}:${rtmpPort}/live`;
+
+  return {
+    streamKey,
+    serverUrl,
+    publishUrl: `${serverUrl}/${streamKey}`
+  };
 }
 
 function DetectionPreview({
@@ -1332,11 +1344,13 @@ function CamerasView({
     if (sourceType === "webcam") {
       payload.deviceIndex = Number(form.get("deviceIndex") ?? 0);
       delete payload.rtspUrl;
+      delete payload.rtmpStreamKey;
     } else if (sourceType === "rtmp") {
       delete payload.deviceIndex;
       delete payload.rtspUrl;
     } else {
       delete payload.deviceIndex;
+      delete payload.rtmpStreamKey;
     }
 
     return payload;
@@ -1426,10 +1440,20 @@ function CamerasView({
               <input name="rtspUrl" placeholder="RTSP" defaultValue={editingCamera?.rtspUrl ?? ""} required />
             ) : null}
             {sourceType === "rtmp" ? (
-              <p className="muted form-note">
-                O link RTMP e gerado pelo sistema. Configure esse link na camera como destino
-                de transmissao.
-              </p>
+              <>
+                <label>
+                  Chave RTMP / Stream
+                  <input
+                    name="rtmpStreamKey"
+                    placeholder="ex.: escola-portaria"
+                    defaultValue={editingCamera ? rtmpStreamKey(editingCamera) ?? "" : ""}
+                  />
+                </label>
+                <p className="muted form-note">
+                  Se deixar em branco, o sistema gera uma chave automaticamente. Em cameras que
+                  pedem servidor e chave separados, use servidor RTMP + chave mostrados na lista.
+                </p>
+              </>
             ) : null}
             {sourceType === "webcam" ? (
               <label>
@@ -1487,11 +1511,16 @@ function CamerasView({
                 <div className="list-row" key={camera.id}>
                   <div>
                     {(() => {
-                      const publishUrl = rtmpPublishUrl(camera);
-                      return publishUrl ? (
+                      const publishInfo = rtmpPublishInfo(camera);
+                      return publishInfo ? (
                         <div className="rtmp-box">
-                          <span className="muted">Link para configurar na camera</span>
-                          <code>{publishUrl}</code>
+                          <span className="muted">Configuração RTMP para a camera do cliente</span>
+                          <small>Servidor RTMP</small>
+                          <code>{publishInfo.serverUrl}</code>
+                          <small>Chave / Stream</small>
+                          <code>{publishInfo.streamKey}</code>
+                          <small>URL completa</small>
+                          <code>{publishInfo.publishUrl}</code>
                         </div>
                       ) : null;
                     })()}

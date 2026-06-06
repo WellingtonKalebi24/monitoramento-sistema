@@ -6,7 +6,7 @@ import { AuthUser, requireAuth, signToken, tenantScope } from "./auth.js";
 import { pool } from "./db.js";
 import { env } from "./env.js";
 import { removeStoredFace, saveFaceDataUrl } from "./files.js";
-import { buildLocalRtmpUrl } from "./rtmp.js";
+import { buildLocalRtmpUrl, normalizeRtmpStreamKey } from "./rtmp.js";
 import {
   buildTelegramConnectLink,
   findTelegramChatId,
@@ -81,6 +81,7 @@ const cameraFieldsSchema = z.object({
   name: z.string().min(2),
   sourceType: z.enum(["rtsp", "rtmp", "webcam"]).default("rtsp"),
   rtspUrl: z.string().trim().optional().nullable(),
+  rtmpStreamKey: z.string().trim().min(2).max(80).optional().nullable(),
   deviceIndex: z.coerce.number().int().min(0).max(20).optional().nullable(),
   location: z.string().min(2),
   sector: z.string().optional().nullable(),
@@ -95,6 +96,18 @@ const cameraSchema = cameraFieldsSchema.superRefine((camera, context) => {
       path: ["rtspUrl"],
       message: "Informe a URL RTSP da câmera."
     });
+  }
+
+  if (camera.sourceType === "rtmp" && camera.rtmpStreamKey) {
+    const normalizedKey = normalizeRtmpStreamKey(camera.rtmpStreamKey);
+
+    if (normalizedKey.length < 2) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["rtmpStreamKey"],
+        message: "Informe uma chave RTMP com letras, números, ponto, traço ou sublinhado."
+      });
+    }
   }
 });
 
@@ -328,6 +341,10 @@ async function notifyTenant(
       })
     )
   );
+}
+
+function rtmpUrlFromInput(streamKey: string | null | undefined, fallbackKey: string) {
+  return buildLocalRtmpUrl(normalizeRtmpStreamKey(streamKey || fallbackKey));
 }
 
 export async function registerRoutes(app: FastifyInstance) {
@@ -1425,10 +1442,30 @@ export async function registerRoutes(app: FastifyInstance) {
     const cameraId = randomUUID();
     const streamUrl =
       body.sourceType === "rtmp"
-        ? body.rtspUrl || buildLocalRtmpUrl(cameraId)
+        ? rtmpUrlFromInput(body.rtmpStreamKey, cameraId)
         : body.sourceType === "rtsp"
           ? body.rtspUrl
           : null;
+
+    if (body.sourceType === "rtmp") {
+      const duplicate = await pool.query(
+        `
+          SELECT id
+          FROM cameras
+          WHERE source_type = 'rtmp'
+            AND rtsp_url = $1
+          LIMIT 1
+        `,
+        [streamUrl]
+      );
+
+      if (duplicate.rows[0]) {
+        return reply.status(409).send({
+          message: "Esta chave RTMP já está em uso. Escolha outra chave para a câmera."
+        });
+      }
+    }
+
     const result = await pool.query(
       `
         INSERT INTO cameras (
@@ -1490,6 +1527,31 @@ export async function registerRoutes(app: FastifyInstance) {
     const tenantId = getTenantId(user, request);
     const params = request.params as { id: string };
     const body = cameraFieldsSchema.partial().parse(request.body);
+    const rtmpUrl =
+      body.sourceType === "rtmp" && body.rtmpStreamKey
+        ? rtmpUrlFromInput(body.rtmpStreamKey, params.id)
+        : null;
+
+    if (rtmpUrl) {
+      const duplicate = await pool.query(
+        `
+          SELECT id
+          FROM cameras
+          WHERE source_type = 'rtmp'
+            AND rtsp_url = $1
+            AND id <> $2
+          LIMIT 1
+        `,
+        [rtmpUrl, params.id]
+      );
+
+      if (duplicate.rows[0]) {
+        return reply.status(409).send({
+          message: "Esta chave RTMP já está em uso. Escolha outra chave para a câmera."
+        });
+      }
+    }
+
     const result = await pool.query(
       `
         UPDATE cameras
@@ -1497,7 +1559,7 @@ export async function registerRoutes(app: FastifyInstance) {
           name = COALESCE($3, name),
           rtsp_url = CASE
             WHEN COALESCE($9, source_type) = 'webcam' THEN NULL
-            WHEN COALESCE($9, source_type) = 'rtmp' THEN COALESCE($4, rtsp_url, $11)
+            WHEN COALESCE($9, source_type) = 'rtmp' THEN COALESCE($11, $4, rtsp_url, $12)
             ELSE COALESCE($4, rtsp_url)
           END,
           location = COALESCE($5, location),
@@ -1537,6 +1599,7 @@ export async function registerRoutes(app: FastifyInstance) {
         body.status ?? null,
         body.sourceType ?? null,
         body.deviceIndex ?? null,
+        rtmpUrl,
         buildLocalRtmpUrl(params.id)
       ]
     );

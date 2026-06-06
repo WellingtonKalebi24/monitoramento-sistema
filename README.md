@@ -150,6 +150,14 @@ Esse link deve ser configurado na câmera como destino de transmissão RTMP. A I
 internamente pelo servidor local e passa a exibir/reconhecer a câmera quando a câmera começar a
 publicar.
 
+Em câmeras que pedem os campos separados, configure:
+
+- Servidor RTMP: `rtmp://IP-DO-SERVIDOR:1935/live`
+- Chave/Stream: a chave exibida no painel master da câmera
+
+Em produção, abra/libere a porta TCP `1935` no firewall da VPS e no painel do provedor. A porta
+HTTP `80` usada pelo Caddy não transporta RTMP.
+
 
 ## Clientes e cameras ativas
 

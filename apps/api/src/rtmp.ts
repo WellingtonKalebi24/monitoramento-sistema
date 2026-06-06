@@ -46,10 +46,13 @@ async function validatePublish(session: RtmpSession) {
       FROM cameras c
       INNER JOIN tenants t ON t.id = c.tenant_id
       WHERE c.source_type = 'rtmp'
-        AND c.rtsp_url = $1
+        AND (
+          c.rtsp_url = $1
+          OR regexp_replace(c.rtsp_url, '^.*/', '') = $2
+        )
       LIMIT 1
     `,
-    [buildLocalRtmpUrl(streamName)]
+    [buildLocalRtmpUrl(streamName), streamName]
   );
   const camera = result.rows[0];
 
@@ -92,4 +95,13 @@ export function startRtmpServer() {
 
 export function buildLocalRtmpUrl(streamKey: string) {
   return `rtmp://127.0.0.1:${env.RTMP_PORT}/${env.RTMP_APP}/${streamKey}`;
+}
+
+export function normalizeRtmpStreamKey(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
 }
