@@ -154,8 +154,18 @@ type NotificationContact = {
   connected: boolean;
 };
 
-const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
-const aiUrl = process.env.NEXT_PUBLIC_AI_URL ?? "http://localhost:8000";
+function normalizedBaseUrl(value: string) {
+  return value.replace(/\/+$/, "");
+}
+
+const apiUrl = normalizedBaseUrl(
+  process.env.NEXT_PUBLIC_API_URL ??
+    (process.env.NODE_ENV === "production" ? "/api" : "http://localhost:4000")
+);
+const aiUrl = normalizedBaseUrl(
+  process.env.NEXT_PUBLIC_AI_URL ??
+    (process.env.NODE_ENV === "production" ? "/ai" : "http://localhost:8000")
+);
 const rtmpPort = process.env.NEXT_PUBLIC_RTMP_PORT ?? "1935";
 
 async function fileToDataUrl(file: File) {
@@ -474,18 +484,26 @@ export default function AppPage() {
           <form className="form" onSubmit={handleLogin}>
             <label>
               E-mail
-              <input name="email" defaultValue="cliente@meip.local" />
+              <input
+                name="email"
+                type="email"
+                placeholder="seu@email.com"
+                autoComplete="email"
+                required
+              />
             </label>
             <label>
               Senha
-              <input name="password" type="password" defaultValue="admin123" />
+              <input
+                name="password"
+                type="password"
+                placeholder="Sua senha"
+                autoComplete="current-password"
+                required
+              />
             </label>
             <button type="submit">Entrar</button>
           </form>
-          <div className="hint">
-            Cliente: <strong>cliente@meip.local</strong> · Master:{" "}
-            <strong>master@meip.local</strong> · senha <strong>admin123</strong>
-          </div>
           {message ? <p className="error">{message}</p> : null}
         </section>
       </main>
