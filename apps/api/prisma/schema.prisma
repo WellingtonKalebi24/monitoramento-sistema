@@ -1,0 +1,147 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id        String           @id
+  name      String
+  status    String           @default("active")
+  plan      String           @default("local")
+  subscriptionStatus String  @default("active")
+  subscriptionDueDate DateTime?
+  employeeLimit Int          @default(50)
+  cameraLimit Int            @default(10)
+  notificationMode String     @default("all_events")
+  createdAt DateTime         @default(now())
+  users     User[]
+  cameras   Camera[]
+  employees Employee[]
+  detections DetectionEvent[]
+  accessEvents AccessEvent[]
+  notificationContacts TenantNotificationContact[]
+}
+
+model User {
+  id           String   @id
+  tenantId     String?
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         String
+  status       String   @default("active")
+  createdAt    DateTime @default(now())
+  tenant       Tenant?  @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+}
+
+model Camera {
+  id        String           @id
+  tenantId  String
+  name      String
+  rtspUrl   String?
+  sourceType String          @default("rtsp")
+  deviceIndex Int?
+  location  String
+  sector    String?
+  mode      String           @default("general")
+  status    String           @default("configured")
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  tenant    Tenant           @relation(fields: [tenantId], references: [id])
+  detections DetectionEvent[]
+  accessEvents AccessEvent[]
+
+  @@index([tenantId])
+}
+
+model Employee {
+  id        String           @id
+  tenantId  String
+  fullName  String
+  cpf       String?
+  registration String?
+  phone     String?
+  department String?
+  role      String?
+  telegramChatId String?
+  workSchedule String?
+  workDays Json              @default("[\"mon\", \"tue\", \"wed\", \"thu\", \"fri\"]")
+  entryTime DateTime?        @db.Time
+  exitTime DateTime?         @db.Time
+  toleranceMinutes Int       @default(10)
+  status    String           @default("active")
+  createdAt DateTime         @default(now())
+  tenant    Tenant           @relation(fields: [tenantId], references: [id])
+  faces     EmployeeFace[]
+  detections DetectionEvent[]
+  accessEvents AccessEvent[]
+
+  @@index([tenantId])
+}
+
+model TenantNotificationContact {
+  id             String   @id
+  tenantId       String
+  name           String
+  telegramChatId String?
+  status         String   @default("active")
+  createdAt      DateTime @default(now())
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+model EmployeeFace {
+  id          String   @id
+  employeeId  String
+  imageUrl    String
+  embedding   Json
+  embeddingModel String @default("legacy_simple_v1")
+  createdAt   DateTime @default(now())
+  employee    Employee @relation(fields: [employeeId], references: [id])
+
+  @@index([employeeId])
+}
+
+model DetectionEvent {
+  id          String   @id @default(cuid())
+  tenantId    String
+  cameraId    String
+  employeeId  String?
+  eventType   String
+  detectedAt  DateTime
+  faceCount   Int      @default(0)
+  confidence  Float?
+  snapshotUrl String?
+  createdAt   DateTime @default(now())
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  camera      Camera   @relation(fields: [cameraId], references: [id])
+  employee    Employee? @relation(fields: [employeeId], references: [id])
+
+  @@index([tenantId, detectedAt])
+  @@index([cameraId, detectedAt])
+}
+
+model AccessEvent {
+  id          String   @id
+  tenantId    String
+  employeeId  String
+  cameraId    String
+  eventType   String
+  occurredAt  DateTime
+  confidence  Float?
+  snapshotUrl String?
+  createdAt   DateTime @default(now())
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  employee    Employee @relation(fields: [employeeId], references: [id])
+  camera      Camera   @relation(fields: [cameraId], references: [id])
+
+  @@index([tenantId, occurredAt])
+  @@index([employeeId, occurredAt])
+}
