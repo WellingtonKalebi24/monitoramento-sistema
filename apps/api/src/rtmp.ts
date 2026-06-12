@@ -5,7 +5,10 @@ import { env } from "./env.js";
 const require = createRequire(import.meta.url);
 const NodeMediaServer = require("node-media-server") as new (config: unknown) => {
   run: () => void;
-  on: (event: "prePublish", callback: (session: RtmpSession) => void) => void;
+  on: (
+    event: "prePublish" | "postPublish" | "donePublish",
+    callback: (session: RtmpSession) => void
+  ) => void;
 };
 
 let started = false;
@@ -32,14 +35,23 @@ function closePublish(session: RtmpSession, reason: string) {
   session.socket?.end();
 }
 
-async function validatePublish(session: RtmpSession) {
-  const streamName = session.streamName;
+function sessionApp(session: RtmpSession) {
+  const app = session.streamApp?.replace(/^\/+/, "");
 
-  if (session.streamApp !== env.RTMP_APP || !streamName) {
-    closePublish(session, "app or stream key invalid");
-    return;
+  if (app) {
+    return app;
   }
 
+  return session.streamPath?.split("/").filter(Boolean)[0] ?? "";
+}
+
+function sessionStreamName(session: RtmpSession) {
+  const streamName = session.streamName || session.streamPath?.split("/").filter(Boolean).at(-1);
+
+  return streamName ? decodeURIComponent(streamName) : "";
+}
+
+async function findRtmpCamera(streamName: string) {
   const result = await pool.query(
     `
       SELECT c.id, c.status, t.status AS tenant_status
@@ -54,16 +66,64 @@ async function validatePublish(session: RtmpSession) {
     `,
     [buildLocalRtmpUrl(streamName), streamName]
   );
-  const camera = result.rows[0];
+
+  return result.rows[0] as
+    | {
+        id: string;
+        status: string;
+        tenant_status: string;
+      }
+    | undefined;
+}
+
+async function validatePublish(session: RtmpSession) {
+  const app = sessionApp(session);
+  const streamName = sessionStreamName(session);
+
+  if (app !== env.RTMP_APP || !streamName) {
+    closePublish(session, "app or stream key invalid");
+    return;
+  }
+
+  const camera = await findRtmpCamera(streamName);
 
   if (!camera) {
-    closePublish(session, "stream key not registered");
+    console.warn(
+      `[rtmp] publish allowed without registered camera: ${session.streamPath ?? streamName}`
+    );
     return;
   }
 
   if (camera.status === "inactive" || camera.tenant_status !== "active") {
     closePublish(session, "camera or client inactive");
   }
+}
+
+async function updatePublishStatus(session: RtmpSession, status: "online" | "offline") {
+  const app = sessionApp(session);
+  const streamName = sessionStreamName(session);
+
+  if (app !== env.RTMP_APP || !streamName) {
+    return;
+  }
+
+  const camera = await findRtmpCamera(streamName);
+
+  if (!camera || camera.status === "inactive") {
+    return;
+  }
+
+  await pool.query(
+    `
+      UPDATE cameras
+      SET status = $2, updated_at = NOW()
+      WHERE id = $1
+        AND status <> 'inactive'
+    `,
+    [camera.id, status]
+  );
+
+  console.info(`[rtmp] camera ${camera.id} marked ${status} from stream ${streamName}`);
 }
 
 export function startRtmpServer() {
@@ -87,6 +147,18 @@ export function startRtmpServer() {
     void validatePublish(session).catch((error) => {
       console.error("[rtmp] publish validation failed", error);
       closePublish(session, "validation error");
+    });
+  });
+
+  server.on("postPublish", (session) => {
+    void updatePublishStatus(session, "online").catch((error) => {
+      console.error("[rtmp] publish status update failed", error);
+    });
+  });
+
+  server.on("donePublish", (session) => {
+    void updatePublishStatus(session, "offline").catch((error) => {
+      console.error("[rtmp] publish status update failed", error);
     });
   });
 
