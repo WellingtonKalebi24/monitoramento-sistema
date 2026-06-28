@@ -351,6 +351,12 @@ button.danger {
   margin-top: 12px;
 }
 
+.stream-error {
+  margin: 10px 0 0;
+  color: #fca5a5;
+  font-size: 13px;
+}
+
 .badge {
   border-radius: 999px;
   padding: 6px 10px;

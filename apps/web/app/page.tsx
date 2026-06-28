@@ -825,6 +825,9 @@ function DashboardView({
             </span>
             <span className="muted">Rostos no frame: {selectedCameraStatus?.faceCount ?? 0}</span>
           </div>
+          {selectedCameraStatus?.lastError ? (
+            <p className="stream-error">{selectedCameraStatus.lastError}</p>
+          ) : null}
         </article>
 
         <article className="card">

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import base64
 import os
+import select
+import shutil
+import subprocess
 import threading
 import time
 import uuid
@@ -32,6 +35,7 @@ STREAM_FPS = max(1, min(30, int(os.getenv("PREVIEW_STREAM_FPS", "15"))))
 DETECTION_CLIP_SECONDS = max(0.2, float(os.getenv("DETECTION_CLIP_SECONDS", "3")))
 DETECTION_CLIP_FPS = max(1, min(15, int(os.getenv("DETECTION_CLIP_FPS", "8"))))
 DETECTION_CLIP_MAX_WIDTH = max(160, min(1280, int(os.getenv("DETECTION_CLIP_MAX_WIDTH", "640"))))
+RTMP_CAPTURE_BACKEND = os.getenv("RTMP_CAPTURE_BACKEND", "ffmpeg").lower()
 FACE_MODEL_NAME = "opencv_sface_2021dec_v1"
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -131,6 +135,132 @@ face_profiles: list[FaceProfile] = []
 global_lock = threading.Lock()
 webcam_locks: dict[int, threading.Lock] = {}
 webcam_locks_guard = threading.Lock()
+
+
+class FfmpegMjpegCapture:
+    """Read RTMP streams through ffmpeg and expose a VideoCapture-like API.
+
+    Some VPS/OpenCV builds report an RTMP stream as open but never deliver frames.
+    Piping high-quality MJPEG frames through ffmpeg is slower than a native decoder,
+    but it is much more reliable for DVR/camera RTMP publishing.
+    """
+
+    def __init__(self, url: str):
+        self.url = url
+        self.process: subprocess.Popen[bytes] | None = None
+        self.buffer = bytearray()
+        self.stderr_tail: deque[str] = deque(maxlen=20)
+        self._stderr_thread: threading.Thread | None = None
+        self._open()
+
+    def _open(self) -> None:
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg is None:
+            return
+
+        command = [
+            ffmpeg,
+            "-hide_banner",
+            "-nostdin",
+            "-loglevel",
+            "error",
+            "-fflags",
+            "nobuffer",
+            "-flags",
+            "low_delay",
+            "-rtmp_live",
+            "live",
+            "-i",
+            self.url,
+            "-an",
+            "-vf",
+            f"fps={STREAM_FPS}",
+            "-q:v",
+            "2",
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "mjpeg",
+            "pipe:1",
+        ]
+
+        self.process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+        self._stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
+        self._stderr_thread.start()
+
+    def _drain_stderr(self) -> None:
+        process = self.process
+        if process is None or process.stderr is None:
+            return
+
+        for line in iter(process.stderr.readline, b""):
+            decoded = line.decode("utf-8", errors="replace").strip()
+            if decoded:
+                self.stderr_tail.append(decoded)
+
+    def isOpened(self) -> bool:
+        return self.process is not None and self.process.poll() is None
+
+    def _extract_jpeg(self):
+        start = self.buffer.find(b"\xff\xd8")
+        if start < 0:
+            if len(self.buffer) > 1024 * 1024:
+                self.buffer.clear()
+            return None
+
+        if start > 0:
+            del self.buffer[:start]
+
+        end = self.buffer.find(b"\xff\xd9", 2)
+        if end < 0:
+            return None
+
+        jpeg = bytes(self.buffer[: end + 2])
+        del self.buffer[: end + 2]
+        image = np.frombuffer(jpeg, dtype=np.uint8)
+        return cv2.imdecode(image, cv2.IMREAD_COLOR)
+
+    def read(self):
+        process = self.process
+        if process is None or process.stdout is None:
+            return False, None
+
+        deadline = time.time() + 6
+        while time.time() < deadline and self.isOpened():
+            frame = self._extract_jpeg()
+            if frame is not None:
+                return True, frame
+
+            timeout = max(0.1, deadline - time.time())
+            if os.name != "nt":
+                readable, _, _ = select.select([process.stdout], [], [], timeout)
+                if not readable:
+                    continue
+
+            chunk = process.stdout.read(4096)
+            if not chunk:
+                break
+            self.buffer.extend(chunk)
+
+        frame = self._extract_jpeg()
+        return (True, frame) if frame is not None else (False, None)
+
+    def release(self) -> None:
+        process = self.process
+        if process is None:
+            return
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        self.process = None
 
 
 def decode_data_url(image_data_url: str):
@@ -373,6 +503,13 @@ def open_capture(source_type: str, rtsp_url: str | None, device_index: int | Non
     if not rtsp_url:
         return cv2.VideoCapture()
 
+    if (
+        source_type == "rtmp"
+        and RTMP_CAPTURE_BACKEND in {"ffmpeg", "auto"}
+        and shutil.which("ffmpeg") is not None
+    ):
+        return FfmpegMjpegCapture(rtsp_url)
+
     return cv2.VideoCapture(rtsp_url)
 
 
@@ -406,11 +543,14 @@ def monitor_camera_loop(runtime: CameraRuntime) -> None:
         if not capture.isOpened():
             with runtime.lock:
                 runtime.connected = False
-                runtime.last_error = (
-                    "Não foi possível abrir a webcam local."
-                    if runtime.config.source_type == "webcam"
-                    else "Não foi possível conectar à câmera RTSP."
-                )
+                if runtime.config.source_type == "webcam":
+                    runtime.last_error = "Nao foi possivel abrir a webcam local."
+                elif runtime.config.source_type == "rtmp" and shutil.which("ffmpeg") is None:
+                    runtime.last_error = "Nao foi possivel ler RTMP: ffmpeg nao esta instalado na VPS."
+                elif runtime.config.source_type == "rtmp":
+                    runtime.last_error = "Nao foi possivel conectar ao stream RTMP."
+                else:
+                    runtime.last_error = "Nao foi possivel conectar a camera RTSP."
             capture.release()
             if device_lock is not None:
                 device_lock.release()
@@ -426,7 +566,12 @@ def monitor_camera_loop(runtime: CameraRuntime) -> None:
             if not ok or frame is None:
                 with runtime.lock:
                     runtime.connected = False
-                    runtime.last_error = "Falha ao ler frame da câmera."
+                    runtime.last_error = (
+                        "RTMP conectado, mas nenhum frame foi recebido. Confirme se a camera esta publicando "
+                        "em rtmp://IP:1935/live/CHAVE e se a porta 1935 esta liberada."
+                        if runtime.config.source_type == "rtmp"
+                        else "Falha ao ler frame da camera."
+                    )
                 break
 
             now = time.time()
