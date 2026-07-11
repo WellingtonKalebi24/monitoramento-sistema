@@ -198,6 +198,14 @@ function isVideoPreview(url?: string | null) {
   return Boolean(url && /\.(mp4|webm|mov)(\?|$)/i.test(url));
 }
 
+function detectionMediaUrl(url?: string | null) {
+  if (!url) {
+    return null;
+  }
+
+  return url.replace(/^https?:\/\/(?:localhost|127\.0\.0\.1):8000/i, aiUrl);
+}
+
 function rtmpStreamKey(camera: Camera) {
   if (camera.sourceType !== "rtmp" || !camera.rtspUrl) {
     return null;
@@ -234,12 +242,17 @@ function DetectionPreview({
     return null;
   }
 
+  const mediaUrl = detectionMediaUrl(url);
+  if (!mediaUrl) {
+    return null;
+  }
+
   return (
-    <a className="event-preview-link" href={url} target="_blank" rel="noreferrer">
-      {isVideoPreview(url) ? (
+    <a className="event-preview-link" href={mediaUrl} target="_blank" rel="noreferrer">
+      {isVideoPreview(mediaUrl) ? (
         <video
           className="event-preview"
-          src={url}
+          src={mediaUrl}
           muted
           loop
           playsInline
@@ -251,7 +264,7 @@ function DetectionPreview({
           }}
         />
       ) : (
-        <img className="event-preview" src={url} alt={label} />
+        <img className="event-preview" src={mediaUrl} alt={label} />
       )}
       <span>Visualizar 3s</span>
     </a>

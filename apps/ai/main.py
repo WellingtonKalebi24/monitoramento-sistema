@@ -324,6 +324,79 @@ def resize_clip_frame(frame):
     return resized[:output_height, :output_width]
 
 
+def save_clip_with_ffmpeg(runtime: CameraRuntime, clip_frames: list[Any], width: int, height: int):
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        return None
+
+    filename = f"{runtime.config.id}-{uuid.uuid4()}.mp4"
+    path = DETECTIONS_DIR / filename
+    command = [
+        ffmpeg,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "bgr24",
+        "-s",
+        f"{width}x{height}",
+        "-r",
+        str(DETECTION_CLIP_FPS),
+        "-i",
+        "pipe:0",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(path),
+    ]
+
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        assert process.stdin is not None
+        for frame in clip_frames:
+            if frame.shape[:2] != (height, width):
+                frame = cv2.resize(frame, (width, height))
+            process.stdin.write(frame.tobytes())
+        process.stdin.close()
+        process.wait(timeout=20)
+        stderr = process.stderr.read() if process.stderr is not None else b""
+    except Exception as exc:
+        if path.exists():
+            path.unlink(missing_ok=True)
+        print(f"[clip] ffmpeg mp4 failed: {exc}", flush=True)
+        return None
+
+    if process.returncode != 0:
+        if path.exists():
+            path.unlink(missing_ok=True)
+        print(
+            f"[clip] ffmpeg mp4 failed: {stderr.decode('utf-8', errors='replace')}",
+            flush=True,
+        )
+        return None
+
+    if path.exists() and path.stat().st_size > 0:
+        with runtime.lock:
+            runtime.latest_snapshot_path = path
+        return f"http://localhost:8000/detections/{filename}"
+
+    return None
+
+
 def save_detection_clip(runtime: CameraRuntime, fallback_frame) -> str:
     detected_at = time.time()
     with runtime.lock:
@@ -349,6 +422,11 @@ def save_detection_clip(runtime: CameraRuntime, fallback_frame) -> str:
 
     clip_frames = [resize_clip_frame(frame) for frame in buffered_frames]
     height, width = clip_frames[0].shape[:2]
+
+    ffmpeg_clip_url = save_clip_with_ffmpeg(runtime, clip_frames, width, height)
+    if ffmpeg_clip_url:
+        return ffmpeg_clip_url
+
     filename = f"{runtime.config.id}-{uuid.uuid4()}.webm"
     path = DETECTIONS_DIR / filename
     writer = cv2.VideoWriter(

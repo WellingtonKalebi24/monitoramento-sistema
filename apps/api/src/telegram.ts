@@ -11,6 +11,79 @@ type TelegramAlertInput = {
   anomaly?: string | null;
 };
 
+function filenameFromUrl(url: string) {
+  try {
+    return new URL(url).pathname.split("/").filter(Boolean).at(-1) ?? "deteccao.jpg";
+  } catch {
+    return "deteccao.jpg";
+  }
+}
+
+function mediaKind(url: string) {
+  const filename = filenameFromUrl(url).toLowerCase();
+
+  if (/\.(mp4|mov|m4v)$/i.test(filename)) {
+    return { endpoint: "sendVideo", field: "video", fallbackType: "video/mp4" };
+  }
+
+  if (/\.(webm|avi|mkv)$/i.test(filename)) {
+    return { endpoint: "sendDocument", field: "document", fallbackType: "video/webm" };
+  }
+
+  return { endpoint: "sendPhoto", field: "photo", fallbackType: "image/jpeg" };
+}
+
+async function postTelegramJson(endpoint: string, body: Record<string, unknown>) {
+  const response = await fetch(
+    `https://api.telegram.org/bot${env.TELEGRAM_ALERT_BOT_TOKEN}/${endpoint}`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(body)
+    }
+  );
+  const payload = (await response.json().catch(() => null)) as
+    | { ok?: boolean; description?: string }
+    | null;
+
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(payload?.description ?? `Telegram retornou HTTP ${response.status}`);
+  }
+}
+
+async function postTelegramMedia(chatId: string, snapshotUrl: string, caption: string) {
+  const kind = mediaKind(snapshotUrl);
+  const response = await fetch(snapshotUrl);
+
+  if (!response.ok) {
+    throw new Error(`Falha ao baixar mídia da detecção: HTTP ${response.status}`);
+  }
+
+  const contentType = response.headers.get("content-type") ?? kind.fallbackType;
+  const media = new Blob([await response.arrayBuffer()], { type: contentType });
+  const form = new FormData();
+  form.append("chat_id", chatId);
+  form.append("caption", caption);
+  form.append(kind.field, media, filenameFromUrl(snapshotUrl));
+
+  const telegramResponse = await fetch(
+    `https://api.telegram.org/bot${env.TELEGRAM_ALERT_BOT_TOKEN}/${kind.endpoint}`,
+    {
+      method: "POST",
+      body: form
+    }
+  );
+  const payload = (await telegramResponse.json().catch(() => null)) as
+    | { ok?: boolean; description?: string }
+    | null;
+
+  if (!telegramResponse.ok || payload?.ok === false) {
+    throw new Error(payload?.description ?? `Telegram retornou HTTP ${telegramResponse.status}`);
+  }
+}
+
 export async function sendTelegramAlert(input: TelegramAlertInput) {
   const chatId = input.chatId || env.TELEGRAM_CHAT_ID;
 
@@ -39,28 +112,25 @@ export async function sendTelegramAlert(input: TelegramAlertInput) {
     .filter(Boolean)
     .join("\n");
 
-  const endpoint = input.snapshotUrl ? "sendPhoto" : "sendMessage";
-  const body = input.snapshotUrl
-    ? {
-        chat_id: chatId,
-        photo: input.snapshotUrl,
-        caption
-      }
-    : {
-        chat_id: chatId,
-        text: caption
-      };
-
-  await fetch(
-    `https://api.telegram.org/bot${env.TELEGRAM_ALERT_BOT_TOKEN}/${endpoint}`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json"
-      },
-      body: JSON.stringify(body)
+  if (input.snapshotUrl) {
+    try {
+      await postTelegramMedia(String(chatId), input.snapshotUrl, caption);
+      return;
+    } catch (error) {
+      console.error("[telegram] falha ao enviar mídia da detecção", error);
     }
-  ).catch(() => undefined);
+  }
+
+  try {
+    await postTelegramJson("sendMessage", {
+      chat_id: chatId,
+      text: input.snapshotUrl
+        ? `${caption}\n\nMídia não anexada automaticamente.`
+        : caption
+    });
+  } catch (error) {
+    console.error("[telegram] falha ao enviar alerta", error);
+  }
 }
 
 type TelegramUser = {
