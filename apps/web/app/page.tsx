@@ -688,6 +688,13 @@ export default function AppPage() {
               setMessage(result.message);
               await loadAll();
             }}
+            onTestTelegram={async (contactId) => {
+              const result = await api<{ sent: boolean; message: string }>(
+                `/notification-contacts/${contactId}/telegram/test`,
+                { method: "POST" }
+              );
+              setMessage(result.message);
+            }}
           />
         ) : null}
 
@@ -1188,7 +1195,8 @@ function NotificationsView({
   onUpdateSettings,
   onCreateContact,
   onGetTelegramLink,
-  onVerifyTelegram
+  onVerifyTelegram,
+  onTestTelegram
 }: {
   settings: NotificationSettings | null;
   contacts: NotificationContact[];
@@ -1196,6 +1204,7 @@ function NotificationsView({
   onCreateContact: (name: string) => Promise<void>;
   onGetTelegramLink: (contactId: string) => Promise<TelegramConnectLink>;
   onVerifyTelegram: (contactId: string) => Promise<void>;
+  onTestTelegram: (contactId: string) => Promise<void>;
 }) {
   const [localMessage, setLocalMessage] = useState<string | null>(null);
   const [telegramLinks, setTelegramLinks] = useState<Record<string, TelegramConnectLink>>({});
@@ -1238,6 +1247,18 @@ function NotificationsView({
       setLocalMessage("Responsável conectado ao Telegram com sucesso.");
     } catch (error) {
       setLocalMessage(error instanceof Error ? error.message : "Falha ao verificar Telegram.");
+    } finally {
+      setPendingId(null);
+    }
+  }
+
+  async function testTelegram(contactId: string) {
+    try {
+      setPendingId(contactId);
+      await onTestTelegram(contactId);
+      setLocalMessage("Mensagem de teste enviada para o Telegram.");
+    } catch (error) {
+      setLocalMessage(error instanceof Error ? error.message : "Falha ao enviar teste.");
     } finally {
       setPendingId(null);
     }
@@ -1288,7 +1309,16 @@ function NotificationsView({
                   </div>
                   <div className="row-actions">
                     {contact.connected ? (
-                      <span className="badge">Ativo</span>
+                      <>
+                        <span className="badge">Ativo</span>
+                        <button
+                          className="ghost"
+                          disabled={pendingId === contact.id}
+                          onClick={() => testTelegram(contact.id)}
+                        >
+                          {pendingId === contact.id ? "Enviando..." : "Enviar teste"}
+                        </button>
+                      </>
                     ) : (
                       <>
                         <button

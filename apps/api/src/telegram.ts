@@ -84,6 +84,17 @@ async function postTelegramMedia(chatId: string, snapshotUrl: string, caption: s
   }
 }
 
+export async function sendTelegramText(chatId: string, text: string) {
+  if (!env.TELEGRAM_ALERT_BOT_TOKEN || !chatId) {
+    throw new Error("Bot de alerta ou chat do Telegram não configurado.");
+  }
+
+  await postTelegramJson("sendMessage", {
+    chat_id: chatId,
+    text
+  });
+}
+
 export async function sendTelegramAlert(input: TelegramAlertInput) {
   const chatId = input.chatId || env.TELEGRAM_CHAT_ID;
 

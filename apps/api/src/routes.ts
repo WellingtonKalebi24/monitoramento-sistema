@@ -10,7 +10,8 @@ import { buildLocalRtmpUrl, normalizeRtmpStreamKey } from "./rtmp.js";
 import {
   buildTelegramConnectLink,
   findTelegramChatId,
-  sendTelegramAlert
+  sendTelegramAlert,
+  sendTelegramText
 } from "./telegram.js";
 
 const ACTIVE_EMBEDDING_MODEL = "opencv_sface_2021dec_v1";
@@ -1376,6 +1377,66 @@ export async function registerRoutes(app: FastifyInstance) {
           error instanceof Error
             ? error.message
             : "Não foi possível verificar a conexão com o Telegram."
+      });
+    }
+  });
+
+  app.post("/notification-contacts/:id/telegram/test", async (request, reply) => {
+    let user: AuthUser;
+    try {
+      user = requireAuth(request);
+    } catch {
+      return unauthorized(reply);
+    }
+
+    const tenantId = getTenantId(user, request);
+    const params = request.params as { id: string };
+    const contact = await pool.query(
+      `
+        SELECT
+          c.id,
+          c.name,
+          c.telegram_chat_id,
+          t.name AS tenant_name
+        FROM tenant_notification_contacts c
+        INNER JOIN tenants t ON t.id = c.tenant_id
+        WHERE c.id = $1
+          AND c.tenant_id = $2
+          AND c.status = 'active'
+      `,
+      [params.id, tenantId]
+    );
+    const contactRow = contact.rows[0];
+
+    if (!contactRow) {
+      return reply.status(404).send({ message: "Responsável não encontrado" });
+    }
+
+    if (!contactRow.telegram_chat_id) {
+      return reply.status(400).send({
+        message: "Conecte este responsável ao Telegram antes de enviar teste."
+      });
+    }
+
+    try {
+      await sendTelegramText(
+        contactRow.telegram_chat_id,
+        [
+          "✅ Teste de alerta MEIP",
+          "",
+          `Cliente: ${contactRow.tenant_name}`,
+          `Responsável: ${contactRow.name}`,
+          "As notificações do sistema estão chegando neste Telegram."
+        ].join("\n")
+      );
+
+      return { sent: true, message: "Mensagem de teste enviada para o Telegram." };
+    } catch (error) {
+      return reply.status(400).send({
+        message:
+          error instanceof Error
+            ? error.message
+            : "Não foi possível enviar a mensagem de teste."
       });
     }
   });
