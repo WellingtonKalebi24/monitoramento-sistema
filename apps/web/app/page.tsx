@@ -1426,13 +1426,22 @@ function NotificationsView({
               <option value="active">Ativo</option>
               <option value="inactive">Inativo</option>
             </select>
+            <div className="form-group">
+              <span className="form-group-title">Canais de notificação</span>
+              <p className="muted form-helper">
+                Escolha por onde este responsável será avisado quando houver reconhecimento.
+              </p>
+            </div>
             <label className="check-row">
               <input
                 type="checkbox"
                 name="notifyTelegram"
                 defaultChecked={editingContact?.notifyTelegram ?? true}
               />
-              Receber pelo Telegram
+              <span>
+                <strong>Telegram</strong>
+                <small>Enviar alerta para o Telegram conectado deste responsável.</small>
+              </span>
             </label>
             <label className="check-row">
               <input
@@ -1440,7 +1449,10 @@ function NotificationsView({
                 name="notifyEmail"
                 defaultChecked={editingContact?.notifyEmail ?? false}
               />
-              Receber por e-mail
+              <span>
+                <strong>E-mail</strong>
+                <small>Enviar também para o endereço informado abaixo.</small>
+              </span>
             </label>
             <input
               name="email"
@@ -1449,7 +1461,12 @@ function NotificationsView({
               defaultValue={editingContact?.email ?? ""}
             />
             <div className="camera-checks">
-              <span className="muted">Câmeras que este responsável recebe</span>
+              <div className="form-group">
+                <span className="form-group-title">Câmeras liberadas para notificação</span>
+                <p className="muted form-helper">
+                  Marque apenas as câmeras que este responsável deve acompanhar.
+                </p>
+              </div>
               <p className="muted form-note">
                 Se nenhuma câmera for marcada, ele recebe alertas de todas as câmeras.
               </p>
@@ -1464,7 +1481,10 @@ function NotificationsView({
                       value={camera.id}
                       defaultChecked={editingContact?.cameraIds.includes(camera.id) ?? false}
                     />
-                    {camera.name} · {camera.location}
+                    <span>
+                      <strong>{camera.name}</strong>
+                      <small>{camera.location}</small>
+                    </span>
                   </label>
                 ))
               )}
