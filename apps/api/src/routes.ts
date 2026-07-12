@@ -4,6 +4,7 @@ import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { AuthUser, requireAuth, signToken, tenantScope } from "./auth.js";
 import { pool } from "./db.js";
+import { sendEmailAlert } from "./email.js";
 import { env } from "./env.js";
 import { removeStoredFace, saveFaceDataUrl } from "./files.js";
 import { buildLocalRtmpUrl, normalizeRtmpStreamKey } from "./rtmp.js";
@@ -16,6 +17,15 @@ import {
 
 const ACTIVE_EMBEDDING_MODEL = "opencv_sface_2021dec_v1";
 type AccessEventType = "entry" | "exit" | "permanence";
+type NotificationInput = {
+  cameraId: string;
+  employeeName?: string | null;
+  cameraName: string;
+  location: string;
+  eventType: string;
+  snapshotUrl?: string | null;
+  anomaly?: string | null;
+};
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -71,7 +81,15 @@ const notificationSettingsSchema = z.object({
 
 const notificationContactSchema = z.object({
   name: z.string().min(2),
-  status: z.enum(["active", "inactive"]).default("active")
+  status: z.enum(["active", "inactive"]).default("active"),
+  notifyTelegram: z.boolean().default(true),
+  notifyEmail: z.boolean().default(false),
+  email: z.string().email().optional().nullable(),
+  cameraIds: z.array(z.string().min(1)).default([])
+});
+
+const notificationContactUpdateSchema = notificationContactSchema.partial().extend({
+  cameraIds: z.array(z.string().min(1)).optional()
 });
 
 const employeeFaceSchema = z.object({
@@ -309,20 +327,36 @@ function eventAnomaly(
 
 async function notifyTenant(
   tenantId: string,
-  input: Parameters<typeof sendTelegramAlert>[0],
+  input: NotificationInput,
   alwaysNotify = false
 ) {
   const [tenant, contacts] = await Promise.all([
     pool.query(`SELECT notification_mode FROM tenants WHERE id = $1`, [tenantId]),
     pool.query(
       `
-        SELECT telegram_chat_id
-        FROM tenant_notification_contacts
-        WHERE tenant_id = $1
-          AND status = 'active'
-          AND telegram_chat_id IS NOT NULL
+        SELECT
+          c.telegram_chat_id,
+          c.notify_telegram,
+          c.notify_email,
+          c.email
+        FROM tenant_notification_contacts c
+        WHERE c.tenant_id = $1
+          AND c.status = 'active'
+          AND (
+            NOT EXISTS (
+              SELECT 1
+              FROM tenant_notification_contact_cameras cc
+              WHERE cc.contact_id = c.id
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM tenant_notification_contact_cameras cc
+              WHERE cc.contact_id = c.id
+                AND cc.camera_id = $2
+            )
+          )
       `,
-      [tenantId]
+      [tenantId, input.cameraId]
     )
   ]);
 
@@ -335,12 +369,72 @@ async function notifyTenant(
   }
 
   await Promise.all(
-    contacts.rows.map((contact) =>
-      sendTelegramAlert({
-        ...input,
-        chatId: contact.telegram_chat_id
-      })
-    )
+    contacts.rows.flatMap((contact) => {
+      const tasks: Promise<void>[] = [];
+
+      if (contact.notify_telegram && contact.telegram_chat_id) {
+        tasks.push(
+          sendTelegramAlert({
+            ...input,
+            chatId: contact.telegram_chat_id
+          })
+        );
+      }
+
+      if (contact.notify_email && contact.email) {
+        tasks.push(
+          sendEmailAlert({
+            ...input,
+            to: contact.email
+          }).catch((error) => {
+            console.error("[email] falha ao enviar alerta", error);
+          })
+        );
+      }
+
+      return tasks;
+    })
+  );
+}
+
+async function syncNotificationContactCameras(
+  contactId: string,
+  tenantId: string,
+  cameraIds: string[]
+) {
+  const uniqueCameraIds = [...new Set(cameraIds)];
+
+  await pool.query(
+    `DELETE FROM tenant_notification_contact_cameras WHERE contact_id = $1`,
+    [contactId]
+  );
+
+  if (uniqueCameraIds.length === 0) {
+    return;
+  }
+
+  const cameras = await pool.query(
+    `
+      SELECT id
+      FROM cameras
+      WHERE tenant_id = $1
+        AND id = ANY($2::text[])
+    `,
+    [tenantId, uniqueCameraIds]
+  );
+  const validCameraIds = cameras.rows.map((camera) => camera.id);
+
+  if (validCameraIds.length === 0) {
+    return;
+  }
+
+  await pool.query(
+    `
+      INSERT INTO tenant_notification_contact_cameras (contact_id, camera_id)
+      SELECT $1, unnest($2::text[])
+      ON CONFLICT DO NOTHING
+    `,
+    [contactId, validCameraIds]
   );
 }
 
@@ -757,6 +851,10 @@ export async function registerRoutes(app: FastifyInstance) {
       employeeCount,
       camerasOnline,
       latestDetections,
+      recognitionsToday,
+      recognitionsThirtyDays,
+      recognitionsYear,
+      employeeAttendance,
       dailyChart,
       monthlyChart,
       yearlyChart
@@ -832,6 +930,80 @@ export async function registerRoutes(app: FastifyInstance) {
       ),
       pool.query(
         `
+          SELECT COUNT(*)::int AS count
+          FROM detection_events
+          WHERE tenant_id = $1
+            AND event_type = 'recognized_face'
+            AND detected_at >= date_trunc('day', NOW())
+        `,
+        [tenantId]
+      ),
+      pool.query(
+        `
+          SELECT COUNT(*)::int AS count
+          FROM detection_events
+          WHERE tenant_id = $1
+            AND event_type = 'recognized_face'
+            AND detected_at >= NOW() - INTERVAL '30 days'
+        `,
+        [tenantId]
+      ),
+      pool.query(
+        `
+          SELECT COUNT(*)::int AS count
+          FROM detection_events
+          WHERE tenant_id = $1
+            AND event_type = 'recognized_face'
+            AND detected_at >= NOW() - INTERVAL '12 months'
+        `,
+        [tenantId]
+      ),
+      pool.query(
+        `
+          SELECT
+            e.id,
+            e.full_name AS "fullName",
+            COUNT(a.id) FILTER (
+              WHERE a.event_type = 'entry'
+                AND (
+                  e.entry_time IS NULL
+                  OR (
+                    EXTRACT(HOUR FROM (a.occurred_at AT TIME ZONE 'America/Sao_Paulo'))::int * 60
+                    + EXTRACT(MINUTE FROM (a.occurred_at AT TIME ZONE 'America/Sao_Paulo'))::int
+                  ) <= (
+                    EXTRACT(HOUR FROM e.entry_time)::int * 60
+                    + EXTRACT(MINUTE FROM e.entry_time)::int
+                    + e.tolerance_minutes
+                  )
+                )
+            )::int AS "onTimeEntries",
+            COUNT(a.id) FILTER (
+              WHERE a.event_type = 'entry'
+                AND e.entry_time IS NOT NULL
+                AND (
+                  EXTRACT(HOUR FROM (a.occurred_at AT TIME ZONE 'America/Sao_Paulo'))::int * 60
+                  + EXTRACT(MINUTE FROM (a.occurred_at AT TIME ZONE 'America/Sao_Paulo'))::int
+                ) > (
+                  EXTRACT(HOUR FROM e.entry_time)::int * 60
+                  + EXTRACT(MINUTE FROM e.entry_time)::int
+                  + e.tolerance_minutes
+                )
+            )::int AS "lateEntries",
+            COUNT(a.id) FILTER (WHERE a.event_type = 'exit')::int AS exits
+          FROM employees e
+          LEFT JOIN access_events a ON a.employee_id = e.id
+            AND a.tenant_id = e.tenant_id
+            AND a.occurred_at >= date_trunc('day', NOW())
+          WHERE e.tenant_id = $1
+            AND e.status = 'active'
+          GROUP BY e.id, e.full_name
+          ORDER BY e.full_name ASC
+          LIMIT 12
+        `,
+        [tenantId]
+      ),
+      pool.query(
+        `
           SELECT TO_CHAR(occurred_at, 'HH24:00') AS label, COUNT(*)::int AS value
           FROM access_events
           WHERE tenant_id = $1
@@ -874,6 +1046,10 @@ export async function registerRoutes(app: FastifyInstance) {
         0
       ),
       camerasOnline: camerasOnline.rows[0].count,
+      recognitionsToday: recognitionsToday.rows[0].count,
+      recognitionsThirtyDays: recognitionsThirtyDays.rows[0].count,
+      recognitionsYear: recognitionsYear.rows[0].count,
+      employeeAttendance: employeeAttendance.rows,
       latestDetections: latestDetections.rows,
       charts: {
         daily: dailyChart.rows,
@@ -1260,14 +1436,23 @@ export async function registerRoutes(app: FastifyInstance) {
     const result = await pool.query(
       `
         SELECT
-          id,
-          name,
-          status,
-          (telegram_chat_id IS NOT NULL) AS connected,
-          created_at AS "createdAt"
-        FROM tenant_notification_contacts
-        WHERE tenant_id = $1
-        ORDER BY created_at DESC
+          c.id,
+          c.name,
+          c.status,
+          c.notify_telegram AS "notifyTelegram",
+          c.notify_email AS "notifyEmail",
+          c.email,
+          (c.telegram_chat_id IS NOT NULL) AS connected,
+          COALESCE(
+            json_agg(cc.camera_id) FILTER (WHERE cc.camera_id IS NOT NULL),
+            '[]'::json
+          ) AS "cameraIds",
+          c.created_at AS "createdAt"
+        FROM tenant_notification_contacts c
+        LEFT JOIN tenant_notification_contact_cameras cc ON cc.contact_id = c.id
+        WHERE c.tenant_id = $1
+        GROUP BY c.id
+        ORDER BY c.created_at DESC
       `,
       [tenantId]
     );
@@ -1291,14 +1476,116 @@ export async function registerRoutes(app: FastifyInstance) {
 
     const result = await pool.query(
       `
-        INSERT INTO tenant_notification_contacts (id, tenant_id, name, status)
-        VALUES ($1, $2, $3, $4)
-        RETURNING id, name, status, false AS connected, created_at AS "createdAt"
+        INSERT INTO tenant_notification_contacts (
+          id,
+          tenant_id,
+          name,
+          status,
+          notify_telegram,
+          notify_email,
+          email
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING
+          id,
+          name,
+          status,
+          notify_telegram AS "notifyTelegram",
+          notify_email AS "notifyEmail",
+          email,
+          false AS connected,
+          '[]'::json AS "cameraIds",
+          created_at AS "createdAt"
       `,
-      [randomUUID(), tenantId, body.name, body.status]
+      [
+        randomUUID(),
+        tenantId,
+        body.name,
+        body.status,
+        body.notifyTelegram,
+        body.notifyEmail,
+        body.email ?? null
+      ]
     );
 
+    await syncNotificationContactCameras(result.rows[0].id, tenantId, body.cameraIds);
+
     return reply.status(201).send(result.rows[0]);
+  });
+
+  app.patch("/notification-contacts/:id", async (request, reply) => {
+    let user: AuthUser;
+    try {
+      user = requireAuth(request);
+    } catch {
+      return unauthorized(reply);
+    }
+
+    const tenantId = getTenantId(user, request);
+    const params = request.params as { id: string };
+    const body = notificationContactUpdateSchema.parse(request.body);
+    if (!tenantId) {
+      return forbidden(reply);
+    }
+
+    const result = await pool.query(
+      `
+        UPDATE tenant_notification_contacts
+        SET
+          name = COALESCE($3, name),
+          status = COALESCE($4, status),
+          notify_telegram = COALESCE($5, notify_telegram),
+          notify_email = COALESCE($6, notify_email),
+          email = CASE
+            WHEN $7::boolean THEN $8
+            ELSE email
+          END,
+          updated_at = NOW()
+        WHERE id = $1
+          AND tenant_id = $2
+        RETURNING
+          id,
+          name,
+          status,
+          notify_telegram AS "notifyTelegram",
+          notify_email AS "notifyEmail",
+          email,
+          (telegram_chat_id IS NOT NULL) AS connected,
+          created_at AS "createdAt"
+      `,
+      [
+        params.id,
+        tenantId,
+        body.name ?? null,
+        body.status ?? null,
+        body.notifyTelegram ?? null,
+        body.notifyEmail ?? null,
+        Object.prototype.hasOwnProperty.call(body, "email"),
+        body.email ?? null
+      ]
+    );
+
+    if (!result.rows[0]) {
+      return reply.status(404).send({ message: "Responsável não encontrado" });
+    }
+
+    if (body.cameraIds) {
+      await syncNotificationContactCameras(params.id, tenantId, body.cameraIds);
+    }
+
+    const cameras = await pool.query(
+      `
+        SELECT COALESCE(json_agg(camera_id), '[]'::json) AS "cameraIds"
+        FROM tenant_notification_contact_cameras
+        WHERE contact_id = $1
+      `,
+      [params.id]
+    );
+
+    return {
+      ...result.rows[0],
+      cameraIds: cameras.rows[0]?.cameraIds ?? []
+    };
   });
 
   app.get("/notification-contacts/:id/telegram/connect-link", async (request, reply) => {
@@ -1397,6 +1684,9 @@ export async function registerRoutes(app: FastifyInstance) {
           c.id,
           c.name,
           c.telegram_chat_id,
+          c.notify_telegram,
+          c.notify_email,
+          c.email,
           t.name AS tenant_name
         FROM tenant_notification_contacts c
         INNER JOIN tenants t ON t.id = c.tenant_id
@@ -1412,25 +1702,54 @@ export async function registerRoutes(app: FastifyInstance) {
       return reply.status(404).send({ message: "Responsável não encontrado" });
     }
 
-    if (!contactRow.telegram_chat_id) {
-      return reply.status(400).send({
-        message: "Conecte este responsável ao Telegram antes de enviar teste."
-      });
-    }
+    const tasks: Promise<void>[] = [];
 
     try {
-      await sendTelegramText(
-        contactRow.telegram_chat_id,
-        [
-          "✅ Teste de alerta MEIP",
-          "",
-          `Cliente: ${contactRow.tenant_name}`,
-          `Responsável: ${contactRow.name}`,
-          "As notificações do sistema estão chegando neste Telegram."
-        ].join("\n")
-      );
+      const message = [
+        "✅ Teste de alerta MEIP",
+        "",
+        `Cliente: ${contactRow.tenant_name}`,
+        `Responsável: ${contactRow.name}`,
+        "As notificações do sistema estão chegando para este responsável."
+      ].join("\n");
 
-      return { sent: true, message: "Mensagem de teste enviada para o Telegram." };
+      if (contactRow.notify_telegram) {
+        if (!contactRow.telegram_chat_id) {
+          return reply.status(400).send({
+            message: "Conecte este responsável ao Telegram antes de testar o canal Telegram."
+          });
+        }
+
+        tasks.push(sendTelegramText(contactRow.telegram_chat_id, message));
+      }
+
+      if (contactRow.notify_email) {
+        if (!contactRow.email) {
+          return reply.status(400).send({
+            message: "Informe o e-mail deste responsável antes de testar o canal E-mail."
+          });
+        }
+
+        tasks.push(
+          sendEmailAlert({
+            to: contactRow.email,
+            employeeName: "Teste MEIP",
+            cameraName: "Teste de notificação",
+            location: "Sistema",
+            eventType: "entry"
+          })
+        );
+      }
+
+      if (tasks.length === 0) {
+        return reply.status(400).send({
+          message: "Ative Telegram ou E-mail para este responsável antes de enviar teste."
+        });
+      }
+
+      await Promise.all(tasks);
+
+      return { sent: true, message: "Mensagem de teste enviada." };
     } catch (error) {
       return reply.status(400).send({
         message:
@@ -2046,11 +2365,11 @@ export async function registerRoutes(app: FastifyInstance) {
       const anomaly = eventAnomaly(eventType, employeeRow, detectedAt);
 
       await notifyTenant(camera.tenant_id, {
+        cameraId: camera.id,
         employeeName: employeeRow.full_name,
         cameraName: camera.name,
         location: camera.location,
         eventType,
-        confidence: body.confidence,
         snapshotUrl: body.snapshotUrl,
         anomaly
       });

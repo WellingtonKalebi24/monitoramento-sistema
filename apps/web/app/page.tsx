@@ -16,6 +16,16 @@ type Summary = {
   presentEmployees: number;
   absentEmployees: number;
   camerasOnline: number;
+  recognitionsToday: number;
+  recognitionsThirtyDays: number;
+  recognitionsYear: number;
+  employeeAttendance: Array<{
+    id: string;
+    fullName: string;
+    onTimeEntries: number;
+    lateEntries: number;
+    exits: number;
+  }>;
   latestDetections: Detection[];
   charts: {
     daily: ChartPoint[];
@@ -152,6 +162,10 @@ type NotificationContact = {
   name: string;
   status: string;
   connected: boolean;
+  notifyTelegram: boolean;
+  notifyEmail: boolean;
+  email?: string | null;
+  cameraIds: string[];
 };
 
 function normalizedBaseUrl(value: string) {
@@ -667,6 +681,7 @@ export default function AppPage() {
           <NotificationsView
             settings={notificationSettings}
             contacts={notificationContacts}
+            cameras={cameras}
             onUpdateSettings={async (notificationMode) => {
               await api("/notification-settings", {
                 method: "PATCH",
@@ -675,12 +690,20 @@ export default function AppPage() {
               setMessage("Configuração de alertas atualizada.");
               await loadAll();
             }}
-            onCreateContact={async (name) => {
+            onCreateContact={async (payload) => {
               await api("/notification-contacts", {
                 method: "POST",
-                body: JSON.stringify({ name })
+                body: JSON.stringify(payload)
               });
               setMessage("Responsável cadastrado. Conecte o Telegram dele.");
+              await loadAll();
+            }}
+            onUpdateContact={async (contactId, payload) => {
+              await api(`/notification-contacts/${contactId}`, {
+                method: "PATCH",
+                body: JSON.stringify(payload)
+              });
+              setMessage("Responsável atualizado.");
               await loadAll();
             }}
             onGetTelegramLink={async (contactId) =>
@@ -888,10 +911,39 @@ function DashboardView({
         </article>
       </section>
 
-      <section className="grid charts">
-        <Chart title="Hoje" points={summary?.charts.daily ?? []} />
-        <Chart title="30 dias" points={summary?.charts.monthly ?? []} />
-        <Chart title="12 meses" points={summary?.charts.yearly ?? []} />
+      <section className="grid recognition-grid">
+        <Stat label="Reconhecimentos hoje" value={summary?.recognitionsToday ?? 0} />
+        <Stat label="Reconhecimentos em 30 dias" value={summary?.recognitionsThirtyDays ?? 0} />
+        <Stat label="Reconhecimentos em 12 meses" value={summary?.recognitionsYear ?? 0} />
+      </section>
+
+      <section className="card attendance-card">
+        <div className="split section-heading">
+          <div>
+            <h2>Entrada e saída por funcionário</h2>
+            <p className="muted">Quantidade registrada hoje considerando a tolerância configurada.</p>
+          </div>
+        </div>
+        <div className="attendance-table">
+          <div className="attendance-header">
+            <span>Funcionário</span>
+            <span>Entrou no horário</span>
+            <span>Entradas atrasadas</span>
+            <span>Saídas</span>
+          </div>
+          {(summary?.employeeAttendance ?? []).length === 0 ? (
+            <p className="muted">Nenhum funcionário ativo para exibir.</p>
+          ) : (
+            summary?.employeeAttendance.map((employee) => (
+              <div className="attendance-row" key={employee.id}>
+                <strong>{employee.fullName}</strong>
+                <span>{employee.onTimeEntries}</span>
+                <span>{employee.lateEntries}</span>
+                <span>{employee.exits}</span>
+              </div>
+            ))
+          )}
+        </div>
       </section>
     </>
   );
@@ -1200,16 +1252,20 @@ function EmployeesView({
 function NotificationsView({
   settings,
   contacts,
+  cameras,
   onUpdateSettings,
   onCreateContact,
+  onUpdateContact,
   onGetTelegramLink,
   onVerifyTelegram,
   onTestTelegram
 }: {
   settings: NotificationSettings | null;
   contacts: NotificationContact[];
+  cameras: Camera[];
   onUpdateSettings: (mode: NotificationSettings["notificationMode"]) => Promise<void>;
-  onCreateContact: (name: string) => Promise<void>;
+  onCreateContact: (payload: Record<string, unknown>) => Promise<void>;
+  onUpdateContact: (contactId: string, payload: Record<string, unknown>) => Promise<void>;
   onGetTelegramLink: (contactId: string) => Promise<TelegramConnectLink>;
   onVerifyTelegram: (contactId: string) => Promise<void>;
   onTestTelegram: (contactId: string) => Promise<void>;
@@ -1217,18 +1273,32 @@ function NotificationsView({
   const [localMessage, setLocalMessage] = useState<string | null>(null);
   const [telegramLinks, setTelegramLinks] = useState<Record<string, TelegramConnectLink>>({});
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const [editingContact, setEditingContact] = useState<NotificationContact | null>(null);
 
   async function submitContact(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formElement = event.currentTarget;
-    const name = String(new FormData(formElement).get("name") ?? "");
+    const form = new FormData(formElement);
+    const payload = {
+      name: String(form.get("name") ?? ""),
+      status: String(form.get("status") ?? "active"),
+      notifyTelegram: form.get("notifyTelegram") === "on",
+      notifyEmail: form.get("notifyEmail") === "on",
+      email: String(form.get("email") ?? "").trim() || null,
+      cameraIds: form.getAll("cameraIds").map(String)
+    };
 
     try {
-      await onCreateContact(name);
+      if (editingContact) {
+        await onUpdateContact(editingContact.id, payload);
+        setEditingContact(null);
+      } else {
+        await onCreateContact(payload);
+      }
       formElement.reset();
       setLocalMessage(null);
     } catch (error) {
-      setLocalMessage(error instanceof Error ? error.message : "Falha ao cadastrar responsável.");
+      setLocalMessage(error instanceof Error ? error.message : "Falha ao salvar responsável.");
     }
   }
 
@@ -1272,6 +1342,24 @@ function NotificationsView({
     }
   }
 
+  async function toggleStatus(contact: NotificationContact) {
+    try {
+      setPendingId(contact.id);
+      await onUpdateContact(contact.id, {
+        status: contact.status === "active" ? "inactive" : "active"
+      });
+      setLocalMessage(
+        contact.status === "active"
+          ? "Responsável inativado."
+          : "Responsável ativado."
+      );
+    } catch (error) {
+      setLocalMessage(error instanceof Error ? error.message : "Falha ao alterar responsável.");
+    } finally {
+      setPendingId(null);
+    }
+  }
+
   return (
     <>
       <Header
@@ -1294,15 +1382,78 @@ function NotificationsView({
             <option value="all_events">Avisar em toda entrada e saída</option>
             <option value="exceptions_only">Avisar somente atrasos e saídas antecipadas</option>
           </select>
-          <h2 className="section-subtitle">Novo responsável</h2>
-          <form className="form" onSubmit={submitContact}>
-            <input name="name" placeholder="Ex.: Diretor, coordenador ou portaria" required />
-            <button type="submit">Cadastrar responsável</button>
+          <h2 className="section-subtitle">
+            {editingContact ? "Editar responsável" : "Novo responsável"}
+          </h2>
+          <form className="form" onSubmit={submitContact} key={editingContact?.id ?? "new"}>
+            <input
+              name="name"
+              placeholder="Ex.: Diretor, coordenador ou portaria"
+              defaultValue={editingContact?.name ?? ""}
+              required
+            />
+            <select name="status" defaultValue={editingContact?.status ?? "active"}>
+              <option value="active">Ativo</option>
+              <option value="inactive">Inativo</option>
+            </select>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                name="notifyTelegram"
+                defaultChecked={editingContact?.notifyTelegram ?? true}
+              />
+              Receber pelo Telegram
+            </label>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                name="notifyEmail"
+                defaultChecked={editingContact?.notifyEmail ?? false}
+              />
+              Receber por e-mail
+            </label>
+            <input
+              name="email"
+              type="email"
+              placeholder="E-mail do responsável"
+              defaultValue={editingContact?.email ?? ""}
+            />
+            <div className="camera-checks">
+              <span className="muted">Câmeras que este responsável recebe</span>
+              <p className="muted form-note">
+                Se nenhuma câmera for marcada, ele recebe alertas de todas as câmeras.
+              </p>
+              {cameras.length === 0 ? (
+                <p className="muted">Nenhuma câmera cadastrada para este cliente.</p>
+              ) : (
+                cameras.map((camera) => (
+                  <label className="check-row" key={camera.id}>
+                    <input
+                      type="checkbox"
+                      name="cameraIds"
+                      value={camera.id}
+                      defaultChecked={editingContact?.cameraIds.includes(camera.id) ?? false}
+                    />
+                    {camera.name} · {camera.location}
+                  </label>
+                ))
+              )}
+            </div>
+            <div className="row-actions form-actions">
+              <button type="submit">
+                {editingContact ? "Salvar responsável" : "Cadastrar responsável"}
+              </button>
+              {editingContact ? (
+                <button className="ghost" type="button" onClick={() => setEditingContact(null)}>
+                  Cancelar edição
+                </button>
+              ) : null}
+            </div>
           </form>
           {localMessage ? <p className="notice inline-error">{localMessage}</p> : null}
         </article>
         <article className="card">
-          <h2>Destinatários Telegram</h2>
+          <h2>Destinatários</h2>
           <div className="list">
             {contacts.length === 0 ? (
               <p className="muted">Nenhum responsável configurado para receber alertas.</p>
@@ -1312,13 +1463,34 @@ function NotificationsView({
                   <div>
                     <strong>{contact.name}</strong>
                     <p className="muted">
-                      {contact.connected ? "Telegram conectado" : "Aguardando conexão"}
+                      {contact.status === "active" ? "Ativo" : "Inativo"} ·{" "}
+                      {contact.notifyTelegram
+                        ? contact.connected
+                          ? "Telegram conectado"
+                          : "Telegram pendente"
+                        : "Telegram desligado"}{" "}
+                      · {contact.notifyEmail ? contact.email ?? "E-mail pendente" : "E-mail desligado"}
+                    </p>
+                    <p className="muted">
+                      {contact.cameraIds.length === 0
+                        ? "Recebe todas as câmeras"
+                        : `Recebe ${contact.cameraIds.length} câmera(s) selecionada(s)`}
                     </p>
                   </div>
                   <div className="row-actions">
-                    {contact.connected ? (
+                    <button className="ghost" onClick={() => setEditingContact(contact)}>
+                      Editar
+                    </button>
+                    <button
+                      className={contact.status === "active" ? "danger" : "ghost"}
+                      disabled={pendingId === contact.id}
+                      onClick={() => toggleStatus(contact)}
+                    >
+                      {contact.status === "active" ? "Inativar" : "Ativar"}
+                    </button>
+                    {contact.notifyTelegram && contact.connected ? (
                       <>
-                        <span className="badge">Ativo</span>
+                        <span className="badge">Telegram ativo</span>
                         <button
                           className="ghost"
                           disabled={pendingId === contact.id}
@@ -1327,7 +1499,7 @@ function NotificationsView({
                           {pendingId === contact.id ? "Enviando..." : "Enviar teste"}
                         </button>
                       </>
-                    ) : (
+                    ) : contact.notifyTelegram ? (
                       <>
                         <button
                           className="ghost"
@@ -1346,6 +1518,16 @@ function NotificationsView({
                           </button>
                         ) : null}
                       </>
+                    ) : contact.notifyEmail ? (
+                      <button
+                        className="ghost"
+                        disabled={pendingId === contact.id}
+                        onClick={() => testTelegram(contact.id)}
+                      >
+                        {pendingId === contact.id ? "Enviando..." : "Enviar teste"}
+                      </button>
+                    ) : (
+                      <span className="badge inactive">Sem canal</span>
                     )}
                   </div>
                 </div>

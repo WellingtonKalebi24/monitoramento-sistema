@@ -148,6 +148,11 @@ p {
   grid-template-columns: repeat(3, 1fr);
 }
 
+.recognition-grid {
+  grid-template-columns: repeat(3, 1fr);
+  margin-bottom: 18px;
+}
+
 .card {
   border: 1px solid rgba(148, 163, 184, 0.18);
   background: rgba(15, 23, 42, 0.88);
@@ -523,6 +528,62 @@ button.danger {
   background: rgba(15, 23, 42, 0.48);
 }
 
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #cbd5e1;
+  font-size: 14px;
+}
+
+.check-row input {
+  width: auto;
+}
+
+.camera-checks {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 14px;
+  background: rgba(2, 6, 23, 0.2);
+}
+
+.attendance-card {
+  margin-top: 18px;
+}
+
+.attendance-table {
+  display: grid;
+  gap: 10px;
+}
+
+.attendance-header,
+.attendance-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.4fr) repeat(3, minmax(90px, 0.7fr));
+  gap: 12px;
+  align-items: center;
+}
+
+.attendance-header {
+  color: #93c5fd;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.attendance-row {
+  padding: 10px 0;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.attendance-row span {
+  color: #dbeafe;
+  font-weight: 800;
+}
+
 .rtmp-box {
   display: grid;
   gap: 6px;
@@ -600,7 +661,13 @@ button.danger {
 
   .dashboard-grid,
   .two-columns,
-  .charts {
+  .charts,
+  .recognition-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .attendance-header,
+  .attendance-row {
     grid-template-columns: 1fr;
   }
 }

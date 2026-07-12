@@ -6,7 +6,6 @@ type TelegramAlertInput = {
   cameraName: string;
   location: string;
   eventType: string;
-  confidence?: number | null;
   snapshotUrl?: string | null;
   anomaly?: string | null;
 };
@@ -114,9 +113,6 @@ export async function sendTelegramAlert(input: TelegramAlertInput) {
     input.employeeName ? `👤 Nome: ${input.employeeName}` : null,
     `🕒 Horário: ${new Date().toLocaleTimeString("pt-BR")}`,
     `📍 Local: ${input.location}`,
-    input.confidence != null
-      ? `📈 Confiança: ${(input.confidence * 100).toFixed(1)}%`
-      : null,
     "",
     input.anomaly ? `⚠️ ${input.anomaly}` : `✅ ${eventLabel}`
   ]

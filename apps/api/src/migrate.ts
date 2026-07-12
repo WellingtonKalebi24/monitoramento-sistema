@@ -9,7 +9,8 @@ const migrationFiles = [
   "002_platform_expansion.sql",
   "003_client_notifications_and_schedules.sql",
   "004_face_embedding_model.sql",
-  "005_camera_sources.sql"
+  "005_camera_sources.sql",
+  "006_notification_contact_channels.sql"
 ];
 
 for (const migrationFile of migrationFiles) {
