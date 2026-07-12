@@ -158,14 +158,22 @@ function normalizedBaseUrl(value: string) {
   return value.replace(/\/+$/, "");
 }
 
-const apiUrl = normalizedBaseUrl(
-  process.env.NEXT_PUBLIC_API_URL ??
-    (process.env.NODE_ENV === "production" ? "/api" : "http://localhost:4000")
-);
-const aiUrl = normalizedBaseUrl(
-  process.env.NEXT_PUBLIC_AI_URL ??
-    (process.env.NODE_ENV === "production" ? "/ai" : "http://localhost:8000")
-);
+function isLocalBrowserHost(hostname: string) {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+}
+
+function defaultServiceUrl(service: "api" | "ai") {
+  if (typeof window !== "undefined" && isLocalBrowserHost(window.location.hostname)) {
+    return service === "api" ? "http://localhost:4000" : "http://localhost:8000";
+  }
+
+  return service === "api" ? "/api" : "/ai";
+}
+
+const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
+const configuredAiUrl = process.env.NEXT_PUBLIC_AI_URL?.trim();
+const apiUrl = normalizedBaseUrl(configuredApiUrl || defaultServiceUrl("api"));
+const aiUrl = normalizedBaseUrl(configuredAiUrl || defaultServiceUrl("ai"));
 const rtmpHost = process.env.NEXT_PUBLIC_RTMP_HOST;
 const rtmpPort = process.env.NEXT_PUBLIC_RTMP_PORT ?? "1935";
 
