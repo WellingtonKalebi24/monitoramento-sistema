@@ -120,6 +120,14 @@ type AccessEvent = {
   };
 };
 
+type PaginatedAccessEvents = {
+  items: AccessEvent[];
+  page: number;
+  pageSize: number;
+  totalItems: number;
+  totalPages: number;
+};
+
 type EventToast = {
   id: string;
   event: AccessEvent;
@@ -305,6 +313,12 @@ export default function AppPage() {
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [managedCameras, setManagedCameras] = useState<Camera[]>([]);
   const [accessEvents, setAccessEvents] = useState<AccessEvent[]>([]);
+  const [accessEventsPage, setAccessEventsPage] = useState(1);
+  const [accessEventsMeta, setAccessEventsMeta] = useState({
+    totalItems: 0,
+    totalPages: 1,
+    pageSize: 10
+  });
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(
     null
   );
@@ -414,7 +428,7 @@ export default function AppPage() {
         api<Summary>("/dashboard/summary"),
         api<Employee[]>("/employees"),
         api<Camera[]>("/cameras"),
-        api<AccessEvent[]>("/access-events"),
+        api<PaginatedAccessEvents>(`/access-events?page=${accessEventsPage}&pageSize=10`),
         api<NotificationSettings>("/notification-settings"),
         api<NotificationContact[]>("/notification-contacts"),
         fetch(`${aiUrl}/status`).then((response) => response.json())
@@ -423,8 +437,13 @@ export default function AppPage() {
     setSummary(loadedSummary);
     setEmployees(loadedEmployees);
     setCameras(loadedCameras);
-    trackAccessEventNotifications(loadedEvents);
-    setAccessEvents(loadedEvents);
+    trackAccessEventNotifications(loadedEvents.items);
+    setAccessEvents(loadedEvents.items);
+    setAccessEventsMeta({
+      totalItems: loadedEvents.totalItems,
+      totalPages: loadedEvents.totalPages,
+      pageSize: loadedEvents.pageSize
+    });
     setNotificationSettings(loadedSettings);
     setNotificationContacts(loadedContacts);
     setAiStatus(loadedAiStatus);
@@ -461,7 +480,7 @@ export default function AppPage() {
     }, 5000);
 
     return () => window.clearInterval(interval);
-  }, [token, user, selectedTenantId]);
+  }, [token, user, selectedTenantId, accessEventsPage]);
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -506,6 +525,8 @@ export default function AppPage() {
     setUser(null);
     setSummary(null);
     setAccessEvents([]);
+    setAccessEventsPage(1);
+    setAccessEventsMeta({ totalItems: 0, totalPages: 1, pageSize: 10 });
     setEventToasts([]);
     knownAccessEventIds.current = new Set();
     accessEventsInitialized.current = false;
@@ -729,7 +750,16 @@ export default function AppPage() {
           />
         ) : null}
 
-        {activeTab === "events" ? <EventsView events={accessEvents} /> : null}
+        {activeTab === "events" ? (
+          <EventsView
+            events={accessEvents}
+            page={accessEventsPage}
+            totalPages={accessEventsMeta.totalPages}
+            totalItems={accessEventsMeta.totalItems}
+            pageSize={accessEventsMeta.pageSize}
+            onPageChange={setAccessEventsPage}
+          />
+        ) : null}
 
         {activeTab === "master" && user.role === "master_admin" ? (
           <MasterView
@@ -1811,17 +1841,63 @@ function CamerasView({
   );
 }
 
-function EventsView({ events }: { events: AccessEvent[] }) {
+function EventsView({
+  events,
+  page,
+  totalPages,
+  totalItems,
+  pageSize,
+  onPageChange
+}: {
+  events: AccessEvent[];
+  page: number;
+  totalPages: number;
+  totalItems: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+}) {
+  const firstItem = totalItems === 0 ? 0 : (page - 1) * pageSize + 1;
+  const lastItem = Math.min(page * pageSize, totalItems);
+
   return (
     <>
       <Header title="Eventos de acesso" subtitle="Entrada, saída e permanência por funcionário." />
       <article className="card">
+        <div className="events-toolbar">
+          <div>
+            <h2>Histórico paginado</h2>
+            <p className="muted">
+              {totalItems === 0
+                ? "Nenhum evento encontrado."
+                : `Mostrando ${firstItem}-${lastItem} de ${totalItems} evento(s).`}
+            </p>
+          </div>
+          <div className="pagination">
+            <button
+              className="ghost"
+              disabled={page <= 1}
+              onClick={() => onPageChange(Math.max(1, page - 1))}
+            >
+              Anterior
+            </button>
+            <span>
+              Página {page} de {totalPages}
+            </span>
+            <button
+              className="ghost"
+              disabled={page >= totalPages}
+              onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+            >
+              Próxima
+            </button>
+          </div>
+        </div>
         <div className="list">
           {events.length === 0 ? (
             <p className="muted">Nenhum evento de acesso ainda.</p>
           ) : (
             events.map((event) => (
-              <div className="list-row" key={event.id}>
+              <div className="list-row event-row" key={event.id}>
                 <div className="event-main">
                   <DetectionPreview
                     url={event.snapshotUrl}
@@ -1835,7 +1911,9 @@ function EventsView({ events }: { events: AccessEvent[] }) {
                     </p>
                   </div>
                 </div>
-                <span>{new Date(event.occurredAt).toLocaleString("pt-BR")}</span>
+                <span className="event-date">
+                  {new Date(event.occurredAt).toLocaleString("pt-BR")}
+                </span>
               </div>
             ))
           )}

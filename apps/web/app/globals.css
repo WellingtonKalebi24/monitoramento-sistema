@@ -392,6 +392,42 @@ button.danger {
   min-width: 0;
 }
 
+.event-row {
+  align-items: center;
+}
+
+.event-date {
+  color: #bfdbfe;
+  font-size: 14px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.events-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.events-toolbar h2 {
+  margin-bottom: 6px;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  color: #bfdbfe;
+  white-space: nowrap;
+}
+
+.pagination button {
+  width: auto;
+}
+
 .event-preview-link {
   width: 112px;
   flex: 0 0 112px;
@@ -659,6 +695,10 @@ button.danger {
     border-bottom: 1px solid rgba(148, 163, 184, 0.14);
   }
 
+  .sidebar nav {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+
   .dashboard-grid,
   .two-columns,
   .charts,
@@ -673,6 +713,10 @@ button.danger {
 }
 
 @media (max-width: 680px) {
+  .auth-shell {
+    padding: 14px;
+  }
+
   .camera-modal {
     inset: 8px;
     padding: 10px;
@@ -688,11 +732,53 @@ button.danger {
     width: 100%;
   }
 
+  .event-row {
+    gap: 10px;
+  }
+
+  .event-date {
+    width: 100%;
+    text-align: left;
+    white-space: normal;
+  }
+
+  .event-preview-link {
+    width: 88px;
+    flex-basis: 88px;
+  }
+
+  .event-preview {
+    width: 88px;
+    height: 54px;
+  }
+
+  .events-toolbar,
+  .pagination {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .pagination {
+    width: 100%;
+  }
+
+  .pagination button {
+    width: 100%;
+  }
+
   .compact {
     grid-template-columns: 1fr;
   }
 
   .workspace {
-    padding: 18px;
+    padding: 16px;
+  }
+
+  .sidebar {
+    padding: 18px 14px;
+  }
+
+  .card {
+    padding: 14px;
   }
 }

@@ -2122,32 +2122,57 @@ export async function registerRoutes(app: FastifyInstance) {
     }
 
     const tenantId = getTenantId(user, request);
+    const query = z
+      .object({
+        page: z.coerce.number().int().positive().default(1),
+        pageSize: z.coerce.number().int().positive().max(50).default(10)
+      })
+      .parse(request.query);
 
     if (!tenantId) {
       return forbidden(reply);
     }
 
-    const result = await pool.query(
-      `
-        SELECT
-          a.id,
-          a.event_type AS "eventType",
-          a.occurred_at AS "occurredAt",
-          a.confidence,
-          a.snapshot_url AS "snapshotUrl",
-          json_build_object('id', e.id, 'fullName', e.full_name) AS employee,
-          json_build_object('id', c.id, 'name', c.name, 'location', c.location) AS camera
-        FROM access_events a
-        INNER JOIN employees e ON e.id = a.employee_id
-        INNER JOIN cameras c ON c.id = a.camera_id
-        WHERE a.tenant_id = $1
-        ORDER BY a.occurred_at DESC
-        LIMIT 30
-      `,
-      [tenantId]
-    );
+    const offset = (query.page - 1) * query.pageSize;
+    const [events, total] = await Promise.all([
+      pool.query(
+        `
+          SELECT
+            a.id,
+            a.event_type AS "eventType",
+            a.occurred_at AS "occurredAt",
+            a.confidence,
+            a.snapshot_url AS "snapshotUrl",
+            json_build_object('id', e.id, 'fullName', e.full_name) AS employee,
+            json_build_object('id', c.id, 'name', c.name, 'location', c.location) AS camera
+          FROM access_events a
+          INNER JOIN employees e ON e.id = a.employee_id
+          INNER JOIN cameras c ON c.id = a.camera_id
+          WHERE a.tenant_id = $1
+          ORDER BY a.occurred_at DESC
+          LIMIT $2 OFFSET $3
+        `,
+        [tenantId, query.pageSize, offset]
+      ),
+      pool.query(
+        `
+          SELECT COUNT(*)::int AS count
+          FROM access_events
+          WHERE tenant_id = $1
+        `,
+        [tenantId]
+      )
+    ]);
+    const totalItems = total.rows[0].count;
+    const totalPages = Math.max(1, Math.ceil(totalItems / query.pageSize));
 
-    return result.rows;
+    return {
+      items: events.rows,
+      page: query.page,
+      pageSize: query.pageSize,
+      totalItems,
+      totalPages
+    };
   });
 
   app.get("/internal/monitoring-context", async (request, reply) => {
