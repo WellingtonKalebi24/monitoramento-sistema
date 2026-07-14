@@ -12,6 +12,10 @@ const envSchema = z.object({
   AI_BASE_URL: z.string().default("http://localhost:8000"),
   RTMP_PORT: z.coerce.number().default(1935),
   RTMP_APP: z.string().min(1).default("live"),
+  RTMP_REJECT_INACTIVE_PUBLISH: z
+    .string()
+    .default("false")
+    .transform((value) => value === "true" || value === "1"),
   JWT_SECRET: z.string().min(16).default("troque-esta-chave-em-producao"),
   INTERNAL_API_KEY: z.string().min(1).default("local-internal-key"),
   TELEGRAM_ALERT_BOT_TOKEN: z.string().default(""),

@@ -95,7 +95,16 @@ async function validatePublish(session: RtmpSession) {
   }
 
   if (camera.status === "inactive" || camera.tenant_status !== "active") {
-    closePublish(session, "camera or client inactive");
+    const reason = "camera or client inactive";
+
+    if (env.RTMP_REJECT_INACTIVE_PUBLISH) {
+      closePublish(session, reason);
+      return;
+    }
+
+    console.warn(
+      `[rtmp] publish ignored ${session.streamPath ?? streamName}: ${reason}`
+    );
   }
 }
 
