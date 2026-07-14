@@ -36,6 +36,8 @@ DETECTION_CLIP_SECONDS = max(0.2, float(os.getenv("DETECTION_CLIP_SECONDS", "3")
 DETECTION_CLIP_FPS = max(1, min(15, int(os.getenv("DETECTION_CLIP_FPS", "8"))))
 DETECTION_CLIP_MAX_WIDTH = max(160, min(1280, int(os.getenv("DETECTION_CLIP_MAX_WIDTH", "640"))))
 RTMP_CAPTURE_BACKEND = os.getenv("RTMP_CAPTURE_BACKEND", "ffmpeg").lower()
+RTMP_FIRST_FRAME_TIMEOUT_SECONDS = max(6.0, float(os.getenv("RTMP_FIRST_FRAME_TIMEOUT_SECONDS", "30")))
+RTMP_FRAME_TIMEOUT_SECONDS = max(3.0, float(os.getenv("RTMP_FRAME_TIMEOUT_SECONDS", "10")))
 FACE_MODEL_NAME = "opencv_sface_2021dec_v1"
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -163,7 +165,7 @@ class FfmpegMjpegCapture:
             "-hide_banner",
             "-nostdin",
             "-loglevel",
-            "error",
+            "warning",
             "-fflags",
             "nobuffer",
             "-flags",
@@ -225,12 +227,16 @@ class FfmpegMjpegCapture:
         image = np.frombuffer(jpeg, dtype=np.uint8)
         return cv2.imdecode(image, cv2.IMREAD_COLOR)
 
-    def read(self):
+    def last_error(self) -> str | None:
+        errors = list(self.stderr_tail)[-5:]
+        return "; ".join(errors) if errors else None
+
+    def read(self, timeout_seconds: float | None = None):
         process = self.process
         if process is None or process.stdout is None:
             return False, None
 
-        deadline = time.time() + 6
+        deadline = time.time() + (timeout_seconds or RTMP_FRAME_TIMEOUT_SECONDS)
         while time.time() < deadline and self.isOpened():
             frame = self._extract_jpeg()
             if frame is not None:
@@ -639,19 +645,41 @@ def monitor_camera_loop(runtime: CameraRuntime) -> None:
             runtime.connected = True
             runtime.last_error = None
 
+        received_frame = False
+
         while capture.isOpened() and runtime.active:
-            ok, frame = capture.read()
+            if isinstance(capture, FfmpegMjpegCapture):
+                read_timeout = (
+                    RTMP_FRAME_TIMEOUT_SECONDS
+                    if received_frame
+                    else RTMP_FIRST_FRAME_TIMEOUT_SECONDS
+                )
+                ok, frame = capture.read(read_timeout)
+            else:
+                ok, frame = capture.read()
+
             if not ok or frame is None:
                 with runtime.lock:
                     runtime.connected = False
-                    runtime.last_error = (
-                        "RTMP conectado, mas nenhum frame foi recebido. Confirme se a camera esta publicando "
-                        "em rtmp://IP:1935/live/CHAVE e se a porta 1935 esta liberada."
-                        if runtime.config.source_type == "rtmp"
-                        else "Falha ao ler frame da camera."
-                    )
+                    if runtime.config.source_type == "rtmp":
+                        detail = (
+                            capture.last_error()
+                            if isinstance(capture, FfmpegMjpegCapture)
+                            else None
+                        )
+                        runtime.last_error = (
+                            "RTMP conectado, mas nenhum frame de video foi recebido. "
+                            "Confira se a camera esta enviando video em H.264 para "
+                            "rtmp://IP:1935/live/CHAVE. "
+                            "Na camera, prefira Stream Extra/Substream em H.264 e desative H.265/H.265+."
+                        )
+                        if detail:
+                            runtime.last_error = f"{runtime.last_error} Detalhe ffmpeg: {detail}"
+                    else:
+                        runtime.last_error = "Falha ao ler frame da camera."
                 break
 
+            received_frame = True
             now = time.time()
             event_to_publish: tuple[int, str | None, float | None, str] | None = None
             with runtime.lock:
@@ -843,8 +871,16 @@ def test_camera(request: CameraTestRequest):
         frame_ok = False
 
         if ok:
-            frame_ok, _ = capture.read()
+            if isinstance(capture, FfmpegMjpegCapture):
+                frame_ok, _ = capture.read(min(RTMP_FIRST_FRAME_TIMEOUT_SECONDS, 15.0))
+            else:
+                frame_ok, _ = capture.read()
 
+        capture_error = (
+            capture.last_error()
+            if isinstance(capture, FfmpegMjpegCapture)
+            else None
+        )
         capture.release()
     finally:
         if device_lock is not None:
