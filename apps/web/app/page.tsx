@@ -253,13 +253,20 @@ function rtmpPublishInfo(camera: Camera) {
   }
 
   const host = rtmpHost || (typeof window === "undefined" ? "localhost" : window.location.hostname);
-  const prefix = rtmpPathPrefix.trim().replace(/^\/+|\/+$/g, "");
-  const serverUrl = prefix ? `rtmp://${host}:${rtmpPort}/${prefix}` : `rtmp://${host}:${rtmpPort}`;
+  const internalPath = camera.rtspUrl?.replace(/^rtmp:\/\/[^/]+\//i, "") ?? streamKey;
+  const pathParts = internalPath.split("/").filter(Boolean);
+  const publicPath = pathParts.length > 0 ? pathParts.join("/") : streamKey;
+  const serverPath = pathParts.slice(0, -1).join("/");
+  const fallbackPrefix = rtmpPathPrefix.trim().replace(/^\/+|\/+$/g, "");
+  const effectiveServerPath = serverPath || fallbackPrefix;
+  const serverUrl = effectiveServerPath
+    ? `rtmp://${host}:${rtmpPort}/${effectiveServerPath}`
+    : `rtmp://${host}:${rtmpPort}`;
 
   return {
     streamKey,
     serverUrl,
-    publishUrl: `${serverUrl}/${streamKey}`
+    publishUrl: `rtmp://${host}:${rtmpPort}/${publicPath}`
   };
 }
 
