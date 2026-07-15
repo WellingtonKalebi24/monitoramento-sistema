@@ -282,6 +282,76 @@ class FfmpegMjpegCapture:
         self.process = None
 
 
+class RtmpFallbackCapture:
+    """Try common DVR RTMP path variants without requiring manual recadastro.
+
+    Some DVRs publish as /stream while others require /live/stream. The system
+    stores one URL, but the receiver may expose either shape depending on the
+    RTMP server in use. This wrapper tries both and keeps the first one that
+    actually yields frames.
+    """
+
+    def __init__(self, urls: list[str]):
+        self.urls = urls
+        self.index = 0
+        self.capture: FfmpegMjpegCapture | None = None
+        self.error_tail: deque[str] = deque(maxlen=12)
+        self._open_current()
+
+    def _open_current(self) -> None:
+        if not self.urls:
+            return
+        self.capture = FfmpegMjpegCapture(self.urls[self.index])
+
+    def isOpened(self) -> bool:
+        return self.capture is not None and self.capture.isOpened()
+
+    def _rotate(self) -> bool:
+        if self.capture is not None:
+            error = self.capture.last_error()
+            if error:
+                self.error_tail.append(f"{self.capture.url}: {error}")
+            self.capture.release()
+
+        if len(self.urls) <= 1:
+            self.capture = None
+            return False
+
+        self.index = (self.index + 1) % len(self.urls)
+        self._open_current()
+        return self.isOpened()
+
+    def read(self, timeout_seconds: float | None = None):
+        attempts = max(1, len(self.urls))
+        per_attempt_timeout = max(3.0, (timeout_seconds or RTMP_FRAME_TIMEOUT_SECONDS) / attempts)
+
+        for _ in range(attempts):
+            if self.capture is None or not self.capture.isOpened():
+                if not self._rotate():
+                    continue
+
+            ok, frame = self.capture.read(per_attempt_timeout)
+            if ok and frame is not None:
+                return True, frame
+
+            self._rotate()
+
+        return False, None
+
+    def last_error(self) -> str | None:
+        errors = list(self.error_tail)
+        if self.capture is not None:
+            current_error = self.capture.last_error()
+            if current_error:
+                errors.append(f"{self.capture.url}: {current_error}")
+        return "; ".join(errors[-6:]) if errors else None
+
+    def release(self) -> None:
+        if self.capture is not None:
+            self.capture.release()
+            self.capture = None
+
+
 def decode_data_url(image_data_url: str):
     if "," not in image_data_url:
         raise ValueError("Imagem inválida.")
@@ -592,6 +662,22 @@ def publish_event(
         return False
 
 
+def rtmp_candidate_urls(rtsp_url: str) -> list[str]:
+    candidates = [rtsp_url]
+    prefix = "rtmp://127.0.0.1:1935/"
+
+    if rtsp_url.startswith(prefix):
+        path = rtsp_url[len(prefix):].strip("/")
+        if path.startswith("live/"):
+            alternate = prefix + path[len("live/"):]
+        else:
+            alternate = prefix + "live/" + path
+        if alternate not in candidates:
+            candidates.append(alternate)
+
+    return candidates
+
+
 def open_capture(source_type: str, rtsp_url: str | None, device_index: int | None):
     if source_type == "webcam":
         index = device_index if device_index is not None else 0
@@ -605,7 +691,7 @@ def open_capture(source_type: str, rtsp_url: str | None, device_index: int | Non
         and RTMP_CAPTURE_BACKEND in {"ffmpeg", "auto"}
         and shutil.which("ffmpeg") is not None
     ):
-        return FfmpegMjpegCapture(rtsp_url)
+        return RtmpFallbackCapture(rtmp_candidate_urls(rtsp_url))
 
     return cv2.VideoCapture(rtsp_url)
 
@@ -661,7 +747,7 @@ def monitor_camera_loop(runtime: CameraRuntime) -> None:
         received_frame = False
 
         while capture.isOpened() and runtime.active:
-            if isinstance(capture, FfmpegMjpegCapture):
+            if isinstance(capture, (FfmpegMjpegCapture, RtmpFallbackCapture)):
                 read_timeout = (
                     RTMP_FRAME_TIMEOUT_SECONDS
                     if received_frame
@@ -677,7 +763,7 @@ def monitor_camera_loop(runtime: CameraRuntime) -> None:
                     if runtime.config.source_type == "rtmp":
                         detail = (
                             capture.last_error()
-                            if isinstance(capture, FfmpegMjpegCapture)
+                            if isinstance(capture, (FfmpegMjpegCapture, RtmpFallbackCapture))
                             else None
                         )
                         runtime.last_error = (
@@ -891,14 +977,14 @@ def test_camera(request: CameraTestRequest):
         frame_ok = False
 
         if ok:
-            if isinstance(capture, FfmpegMjpegCapture):
+            if isinstance(capture, (FfmpegMjpegCapture, RtmpFallbackCapture)):
                 frame_ok, _ = capture.read(min(RTMP_FIRST_FRAME_TIMEOUT_SECONDS, 15.0))
             else:
                 frame_ok, _ = capture.read()
 
         capture_error = (
             capture.last_error()
-            if isinstance(capture, FfmpegMjpegCapture)
+            if isinstance(capture, (FfmpegMjpegCapture, RtmpFallbackCapture))
             else None
         )
         capture.release()
