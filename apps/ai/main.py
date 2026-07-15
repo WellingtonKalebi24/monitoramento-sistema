@@ -32,6 +32,8 @@ COOLDOWN_SECONDS = int(os.getenv("DETECTION_COOLDOWN_SECONDS", "20"))
 FACE_MATCH_THRESHOLD = float(os.getenv("SFACE_MATCH_THRESHOLD", "0.363"))
 ANALYSIS_INTERVAL_SECONDS = max(0.05, float(os.getenv("FACE_ANALYSIS_INTERVAL_SECONDS", "0.25")))
 STREAM_FPS = max(1, min(30, int(os.getenv("PREVIEW_STREAM_FPS", "15"))))
+PREVIEW_JPEG_QUALITY = max(45, min(95, int(os.getenv("PREVIEW_JPEG_QUALITY", "82"))))
+RTMP_DECODE_MAX_WIDTH = max(0, min(1920, int(os.getenv("RTMP_DECODE_MAX_WIDTH", "1280"))))
 DETECTION_CLIP_SECONDS = max(0.2, float(os.getenv("DETECTION_CLIP_SECONDS", "3")))
 DETECTION_CLIP_FPS = max(1, min(15, int(os.getenv("DETECTION_CLIP_FPS", "8"))))
 DETECTION_CLIP_MAX_WIDTH = max(160, min(1280, int(os.getenv("DETECTION_CLIP_MAX_WIDTH", "640"))))
@@ -128,6 +130,7 @@ class CameraRuntime:
     last_detection_by_key: dict[str, float] = field(default_factory=dict)
     annotations: list[tuple[int, int, int, int, tuple[int, int, int], str]] = field(default_factory=list)
     last_analysis_at: float = 0.0
+    last_frame_at: float = 0.0
     running: bool = False
     active: bool = True
 
@@ -160,6 +163,10 @@ class FfmpegMjpegCapture:
         if ffmpeg is None:
             return
 
+        video_filters = [f"fps={STREAM_FPS}"]
+        if RTMP_DECODE_MAX_WIDTH > 0:
+            video_filters.append(f"scale='min({RTMP_DECODE_MAX_WIDTH},iw)':-2")
+
         command = [
             ffmpeg,
             "-hide_banner",
@@ -167,18 +174,20 @@ class FfmpegMjpegCapture:
             "-loglevel",
             "warning",
             "-fflags",
-            "nobuffer",
+            "nobuffer+discardcorrupt",
             "-flags",
             "low_delay",
+            "-avioflags",
+            "direct",
             "-rtmp_live",
             "live",
             "-i",
             self.url,
             "-an",
             "-vf",
-            f"fps={STREAM_FPS}",
+            ",".join(video_filters),
             "-q:v",
-            "2",
+            "4",
             "-f",
             "image2pipe",
             "-vcodec",
@@ -681,6 +690,11 @@ def monitor_camera_loop(runtime: CameraRuntime) -> None:
 
             received_frame = True
             now = time.time()
+            with runtime.lock:
+                runtime.last_frame_at = now
+                runtime.connected = True
+                if runtime.last_error and "congel" in runtime.last_error.lower():
+                    runtime.last_error = None
             event_to_publish: tuple[int, str | None, float | None, str] | None = None
             with runtime.lock:
                 annotations = list(runtime.annotations)
@@ -767,7 +781,7 @@ def frame_generator(camera_id: str):
             time.sleep(0.1)
             continue
 
-        ok, buffer = cv2.imencode(".jpg", frame)
+        ok, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), PREVIEW_JPEG_QUALITY])
         if not ok:
             continue
 
@@ -804,6 +818,7 @@ def status():
                 "connected": runtime.connected,
                 "faceCount": runtime.face_count,
                 "lastError": runtime.last_error,
+                "lastFrameAt": runtime.last_frame_at,
             }
             for runtime in runtimes
         ],
@@ -822,6 +837,7 @@ def camera_status(camera_id: str):
             "connected": runtime.connected,
             "faceCount": runtime.face_count,
             "lastError": runtime.last_error,
+            "lastFrameAt": runtime.last_frame_at,
         }
 
 
@@ -944,7 +960,7 @@ def frame(camera_id: str):
             content={"message": "Nenhum frame disponível ainda."},
         )
 
-    ok, buffer = cv2.imencode(".jpg", latest_frame)
+    ok, buffer = cv2.imencode(".jpg", latest_frame, [int(cv2.IMWRITE_JPEG_QUALITY), PREVIEW_JPEG_QUALITY])
     if not ok:
         return JSONResponse(
             status_code=500,
