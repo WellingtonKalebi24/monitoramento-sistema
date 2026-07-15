@@ -11,6 +11,10 @@ const envSchema = z.object({
   API_BASE_URL: z.string().default("http://localhost:4000"),
   AI_BASE_URL: z.string().default("http://localhost:8000"),
   RTMP_PORT: z.coerce.number().default(1935),
+  RTMP_SERVER_ENABLED: z
+    .string()
+    .default("true")
+    .transform((value) => value !== "false" && value !== "0"),
   RTMP_APP: z.string().min(1).default("live"),
   RTMP_REJECT_INACTIVE_PUBLISH: z
     .string()

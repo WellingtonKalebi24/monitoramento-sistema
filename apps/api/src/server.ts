@@ -6,7 +6,12 @@ import { startRtmpServer } from "./rtmp.js";
 const app = await buildApp();
 
 await ensureLocalSeed();
-startRtmpServer();
+
+if (env.RTMP_SERVER_ENABLED) {
+  startRtmpServer();
+} else {
+  app.log.info("RTMP interno desativado; use MediaMTX/nginx-rtmp na porta configurada.");
+}
 
 await app.listen({
   host: "0.0.0.0",
