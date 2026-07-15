@@ -198,7 +198,7 @@ const apiUrl = normalizedBaseUrl(configuredApiUrl || defaultServiceUrl("api"));
 const aiUrl = normalizedBaseUrl(configuredAiUrl || defaultServiceUrl("ai"));
 const rtmpHost = process.env.NEXT_PUBLIC_RTMP_HOST;
 const rtmpPort = process.env.NEXT_PUBLIC_RTMP_PORT ?? "1935";
-const rtmpPathPrefix = process.env.NEXT_PUBLIC_RTMP_PATH_PREFIX ?? "live";
+const rtmpPathPrefix = process.env.NEXT_PUBLIC_RTMP_PATH_PREFIX ?? "";
 
 async function fileToDataUrl(file: File) {
   return new Promise<string>((resolve, reject) => {
