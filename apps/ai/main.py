@@ -165,7 +165,13 @@ class FfmpegMjpegCapture:
 
         video_filters = [f"fps={STREAM_FPS}"]
         if RTMP_DECODE_MAX_WIDTH > 0:
-            video_filters.append(f"scale='min({RTMP_DECODE_MAX_WIDTH},iw)':-2")
+            # Keep the main-stream quality useful for face recognition, but avoid
+            # decoding/sending unnecessarily huge JPEG frames to the browser.
+            # Use force_original_aspect_ratio instead of min()/commas because
+            # some ffmpeg builds parse filtergraph commas differently in argv.
+            video_filters.append(
+                f"scale={RTMP_DECODE_MAX_WIDTH}:-2:force_original_aspect_ratio=decrease"
+            )
 
         command = [
             ffmpeg,
@@ -174,11 +180,9 @@ class FfmpegMjpegCapture:
             "-loglevel",
             "warning",
             "-fflags",
-            "nobuffer+discardcorrupt",
+            "discardcorrupt",
             "-flags",
             "low_delay",
-            "-avioflags",
-            "direct",
             "-rtmp_live",
             "live",
             "-i",
