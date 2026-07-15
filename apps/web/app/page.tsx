@@ -198,6 +198,7 @@ const apiUrl = normalizedBaseUrl(configuredApiUrl || defaultServiceUrl("api"));
 const aiUrl = normalizedBaseUrl(configuredAiUrl || defaultServiceUrl("ai"));
 const rtmpHost = process.env.NEXT_PUBLIC_RTMP_HOST;
 const rtmpPort = process.env.NEXT_PUBLIC_RTMP_PORT ?? "1935";
+const rtmpPathPrefix = process.env.NEXT_PUBLIC_RTMP_PATH_PREFIX ?? "live";
 
 async function fileToDataUrl(file: File) {
   return new Promise<string>((resolve, reject) => {
@@ -252,7 +253,8 @@ function rtmpPublishInfo(camera: Camera) {
   }
 
   const host = rtmpHost || (typeof window === "undefined" ? "localhost" : window.location.hostname);
-  const serverUrl = `rtmp://${host}:${rtmpPort}/live`;
+  const prefix = rtmpPathPrefix.trim().replace(/^\/+|\/+$/g, "");
+  const serverUrl = prefix ? `rtmp://${host}:${rtmpPort}/${prefix}` : `rtmp://${host}:${rtmpPort}`;
 
   return {
     streamKey,

@@ -174,8 +174,15 @@ export function startRtmpServer() {
   server.run();
 }
 
+function normalizedRtmpPathPrefix() {
+  return env.RTMP_PATH_PREFIX.trim().replace(/^\/+|\/+$/g, "");
+}
+
 export function buildLocalRtmpUrl(streamKey: string) {
-  return `rtmp://127.0.0.1:${env.RTMP_PORT}/${env.RTMP_APP}/${streamKey}`;
+  const prefix = normalizedRtmpPathPrefix();
+  const path = prefix ? `${prefix}/${streamKey}` : streamKey;
+
+  return `rtmp://127.0.0.1:${env.RTMP_PORT}/${path}`;
 }
 
 export function normalizeRtmpStreamKey(value: string) {
