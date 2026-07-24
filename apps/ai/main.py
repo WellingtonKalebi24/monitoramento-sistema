@@ -41,6 +41,7 @@ DETECTION_CLIP_MAX_WIDTH = max(160, min(1280, int(os.getenv("DETECTION_CLIP_MAX_
 RTMP_CAPTURE_BACKEND = os.getenv("RTMP_CAPTURE_BACKEND", "ffmpeg").lower()
 RTMP_FIRST_FRAME_TIMEOUT_SECONDS = max(6.0, float(os.getenv("RTMP_FIRST_FRAME_TIMEOUT_SECONDS", "30")))
 RTMP_FRAME_TIMEOUT_SECONDS = max(3.0, float(os.getenv("RTMP_FRAME_TIMEOUT_SECONDS", "10")))
+RTMP_NORMALIZED_PATH_PREFIX = os.getenv("RTMP_NORMALIZED_PATH_PREFIX", "").strip().strip("/")
 FACE_MODEL_NAME = "opencv_sface_2021dec_v1"
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -672,17 +673,36 @@ def publish_event(
 
 
 def rtmp_candidate_urls(rtsp_url: str) -> list[str]:
-    candidates = [rtsp_url]
+    candidates: list[str] = []
     prefix = "rtmp://127.0.0.1:1935/"
 
     if rtsp_url.startswith(prefix):
         path = rtsp_url[len(prefix):].strip("/")
+        stream_key = path.split("/")[-1] if path else ""
+
+        # Optional VPS-side normalizer:
+        # camera/DVR keeps publishing to rtmp://IP:1935/live/<key>, while nginx-rtmp
+        # or another local receiver republishes an H.264-friendly stream to
+        # rtmp://127.0.0.1:1935/<normalized-prefix>/<key>. Trying this first lets
+        # high-resolution/main streams be normalized without changing the camera
+        # cadastro or forcing customers to leave RTMP.
+        if (
+            RTMP_NORMALIZED_PATH_PREFIX
+            and stream_key
+            and not path.startswith(f"{RTMP_NORMALIZED_PATH_PREFIX}/")
+        ):
+            candidates.append(prefix + RTMP_NORMALIZED_PATH_PREFIX + "/" + stream_key)
+
+        candidates.append(rtsp_url)
+
         if path.startswith("live/"):
             alternate = prefix + path[len("live/"):]
         else:
             alternate = prefix + "live/" + path
         if alternate not in candidates:
             candidates.append(alternate)
+    else:
+        candidates.append(rtsp_url)
 
     return candidates
 
