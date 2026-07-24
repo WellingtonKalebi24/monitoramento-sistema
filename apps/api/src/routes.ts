@@ -22,7 +22,8 @@ type NotificationInput = {
   employeeName?: string | null;
   cameraName: string;
   location: string;
-  eventType: string;
+  eventType: "entry" | "exit";
+  occurredAt: Date;
   snapshotUrl?: string | null;
   anomaly?: string | null;
 };
@@ -300,7 +301,7 @@ function eventAnomaly(
   const workDays = employee.work_days ?? [];
 
   if (workDays.length > 0 && !workDays.includes(localDate)) {
-    return "Detecção fora dos dias previstos.";
+    return "Fora do horário: dia não previsto na jornada.";
   }
 
   const currentTime = new Intl.DateTimeFormat("pt-BR", {
@@ -315,11 +316,15 @@ function eventAnomaly(
   const exitMinutes = timeInMinutes(employee.exit_time);
 
   if (eventType === "entry" && entryMinutes != null && currentMinutes > entryMinutes + tolerance) {
-    return "Entrada registrada após o horário previsto.";
+    return "Chegou atrasado.";
+  }
+
+  if (eventType === "entry" && entryMinutes != null && currentMinutes < entryMinutes - tolerance) {
+    return "Entrada fora do horário previsto.";
   }
 
   if (eventType === "exit" && exitMinutes != null && currentMinutes < exitMinutes - tolerance) {
-    return "Saída registrada antes do horário previsto.";
+    return "Saída fora do horário: antes do previsto.";
   }
 
   return null;
@@ -2386,7 +2391,7 @@ export async function registerRoutes(app: FastifyInstance) {
       ]
     );
 
-    if (employeeRow) {
+    if (employeeRow && (eventType === "entry" || eventType === "exit")) {
       const anomaly = eventAnomaly(eventType, employeeRow, detectedAt);
 
       await notifyTenant(camera.tenant_id, {
@@ -2395,6 +2400,7 @@ export async function registerRoutes(app: FastifyInstance) {
         cameraName: camera.name,
         location: camera.location,
         eventType,
+        occurredAt: detectedAt,
         snapshotUrl: body.snapshotUrl,
         anomaly
       });

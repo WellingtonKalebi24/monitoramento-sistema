@@ -29,7 +29,8 @@ load_dotenv(ROOT_DIR / ".env")
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:4000")
 INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "local-internal-key")
 COOLDOWN_SECONDS = int(os.getenv("DETECTION_COOLDOWN_SECONDS", "20"))
-FACE_MATCH_THRESHOLD = float(os.getenv("SFACE_MATCH_THRESHOLD", "0.363"))
+FACE_MATCH_THRESHOLD = float(os.getenv("SFACE_MATCH_THRESHOLD", "0.45"))
+FACE_MATCH_MARGIN = max(0.0, float(os.getenv("SFACE_MATCH_MARGIN", "0.08")))
 ANALYSIS_INTERVAL_SECONDS = max(0.05, float(os.getenv("FACE_ANALYSIS_INTERVAL_SECONDS", "0.25")))
 STREAM_FPS = max(1, min(30, int(os.getenv("PREVIEW_STREAM_FPS", "15"))))
 PREVIEW_JPEG_QUALITY = max(45, min(95, int(os.getenv("PREVIEW_JPEG_QUALITY", "82"))))
@@ -618,13 +619,21 @@ def best_match(tenant_id: str, embedding: np.ndarray):
     if not candidates:
         return None, None
 
-    scored = [
-        (profile, cosine_similarity(profile.embedding, embedding))
-        for profile in candidates
-    ]
-    profile, score = max(scored, key=lambda item: item[1])
+    scored = sorted(
+        (
+            (profile, cosine_similarity(profile.embedding, embedding))
+            for profile in candidates
+        ),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    profile, score = scored[0]
+    second_score = scored[1][1] if len(scored) > 1 else None
 
     if score < FACE_MATCH_THRESHOLD:
+        return None, score
+
+    if second_score is not None and score - second_score < FACE_MATCH_MARGIN:
         return None, score
 
     return profile, score

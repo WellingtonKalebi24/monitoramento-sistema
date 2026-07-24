@@ -6,19 +6,14 @@ type EmailAlertInput = {
   employeeName?: string | null;
   cameraName: string;
   location: string;
-  eventType: string;
+  eventType: "entry" | "exit";
+  occurredAt?: Date;
   anomaly?: string | null;
   snapshotUrl?: string | null;
 };
 
-function eventLabel(eventType: string) {
-  return (
-    {
-      entry: "Entrada registrada",
-      exit: "Sa?da registrada",
-      permanence: "Perman?ncia registrada"
-    }[eventType] ?? "Evento registrado"
-  );
+function eventLabel(eventType: "entry" | "exit") {
+  return eventType === "entry" ? "Entrada registrada" : "Sa?da registrada";
 }
 
 function smtpConfigured() {
@@ -44,11 +39,16 @@ export async function sendEmailAlert(input: EmailAlertInput) {
         : undefined
   });
 
+  if (!input.employeeName) {
+    return;
+  }
+
+  const occurredAt = input.occurredAt ? new Date(input.occurredAt) : new Date();
   const lines = [
-    "Colaborador detectado",
+    eventLabel(input.eventType),
     "",
-    input.employeeName ? `Nome: ${input.employeeName}` : null,
-    `Hor?rio: ${new Date().toLocaleTimeString("pt-BR")}`,
+    `Funcion?rio: ${input.employeeName}`,
+    `Hor?rio: ${occurredAt.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo" })}`,
     `Local: ${input.location}`,
     `C?mera: ${input.cameraName}`,
     "",

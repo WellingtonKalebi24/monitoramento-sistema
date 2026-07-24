@@ -5,7 +5,8 @@ type TelegramAlertInput = {
   employeeName?: string | null;
   cameraName: string;
   location: string;
-  eventType: string;
+  eventType: "entry" | "exit";
+  occurredAt?: Date;
   snapshotUrl?: string | null;
   anomaly?: string | null;
 };
@@ -97,24 +98,26 @@ export async function sendTelegramText(chatId: string, text: string) {
 export async function sendTelegramAlert(input: TelegramAlertInput) {
   const chatId = input.chatId || env.TELEGRAM_CHAT_ID;
 
-  if (!env.TELEGRAM_ALERT_BOT_TOKEN || !chatId) {
+  if (!env.TELEGRAM_ALERT_BOT_TOKEN || !chatId || !input.employeeName) {
     return;
   }
 
   const eventLabel = {
     entry: "Entrada registrada",
-    exit: "Saída registrada",
-    permanence: "Permanência registrada"
-  }[input.eventType] ?? "Evento registrado";
+    exit: "Saida registrada"
+  }[input.eventType];
+  const statusLine = input.anomaly ? `Atencao: ${input.anomaly}` : eventLabel;
+  const occurredAt = input.occurredAt ? new Date(input.occurredAt) : new Date();
 
   const caption = [
-    input.employeeName ? "🚨 Colaborador detectado" : "⚠️ Pessoa desconhecida detectada",
+    eventLabel,
     "",
-    input.employeeName ? `👤 Nome: ${input.employeeName}` : null,
-    `🕒 Horário: ${new Date().toLocaleTimeString("pt-BR")}`,
-    `📍 Local: ${input.location}`,
+    `Funcionario: ${input.employeeName}`,
+    `Horario: ${occurredAt.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo" })}`,
+    `Local: ${input.location}`,
+    `Camera: ${input.cameraName}`,
     "",
-    input.anomaly ? `⚠️ ${input.anomaly}` : `✅ ${eventLabel}`
+    statusLine
   ]
     .filter(Boolean)
     .join("\n");
@@ -124,7 +127,7 @@ export async function sendTelegramAlert(input: TelegramAlertInput) {
       await postTelegramMedia(String(chatId), input.snapshotUrl, caption);
       return;
     } catch (error) {
-      console.error("[telegram] falha ao enviar mídia da detecção", error);
+      console.error("[telegram] falha ao enviar midia da deteccao", error);
     }
   }
 
@@ -132,7 +135,7 @@ export async function sendTelegramAlert(input: TelegramAlertInput) {
     await postTelegramJson("sendMessage", {
       chat_id: chatId,
       text: input.snapshotUrl
-        ? `${caption}\n\nMídia não anexada automaticamente.`
+        ? `${caption}\n\nMidia nao anexada automaticamente.`
         : caption
     });
   } catch (error) {
