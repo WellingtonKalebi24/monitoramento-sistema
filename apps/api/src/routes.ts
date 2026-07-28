@@ -1833,15 +1833,16 @@ export async function registerRoutes(app: FastifyInstance) {
           : null;
 
     if (body.sourceType === "rtmp") {
+      const streamKey = normalizeRtmpStreamKey(body.rtmpStreamKey || cameraId);
       const duplicate = await pool.query(
         `
           SELECT id
           FROM cameras
           WHERE source_type = 'rtmp'
-            AND rtsp_url = $1
+            AND regexp_replace(rtsp_url, '^.*/', '') = $1
           LIMIT 1
         `,
-        [streamUrl]
+        [streamKey]
       );
 
       if (duplicate.rows[0]) {
@@ -1918,16 +1919,17 @@ export async function registerRoutes(app: FastifyInstance) {
         : null;
 
     if (rtmpUrl) {
+      const streamKey = normalizeRtmpStreamKey(body.rtmpStreamKey || params.id);
       const duplicate = await pool.query(
         `
           SELECT id
           FROM cameras
           WHERE source_type = 'rtmp'
-            AND rtsp_url = $1
+            AND regexp_replace(rtsp_url, '^.*/', '') = $1
             AND id <> $2
           LIMIT 1
         `,
-        [rtmpUrl, params.id]
+        [streamKey, params.id]
       );
 
       if (duplicate.rows[0]) {

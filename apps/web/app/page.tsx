@@ -253,20 +253,14 @@ function rtmpPublishInfo(camera: Camera) {
   }
 
   const host = rtmpHost || (typeof window === "undefined" ? "localhost" : window.location.hostname);
-  const internalPath = camera.rtspUrl?.replace(/^rtmp:\/\/[^/]+\//i, "") ?? streamKey;
-  const pathParts = internalPath.split("/").filter(Boolean);
-  const publicPath = pathParts.length > 0 ? pathParts.join("/") : streamKey;
-  const serverPath = pathParts.slice(0, -1).join("/");
-  const fallbackPrefix = rtmpPathPrefix.trim().replace(/^\/+|\/+$/g, "");
-  const effectiveServerPath = serverPath || fallbackPrefix;
-  const serverUrl = effectiveServerPath
-    ? `rtmp://${host}:${rtmpPort}/${effectiveServerPath}`
-    : `rtmp://${host}:${rtmpPort}`;
+  const configuredPrefix = rtmpPathPrefix.trim().replace(/^\/+|\/+$/g, "");
+  const publicPrefix = configuredPrefix || "live";
+  const serverUrl = `rtmp://${host}:${rtmpPort}/${publicPrefix}`;
 
   return {
     streamKey,
     serverUrl,
-    publishUrl: `rtmp://${host}:${rtmpPort}/${publicPath}`
+    publishUrl: `${serverUrl}/${streamKey}`
   };
 }
 
@@ -1737,7 +1731,7 @@ function CamerasView({
             {sourceType === "rtmp" ? (
               <>
                 <label>
-                  Chave RTMP / Stream
+                  Chave RTMP / Stream (editável)
                   <input
                     name="rtmpStreamKey"
                     placeholder="ex.: escola-portaria"
@@ -1745,8 +1739,9 @@ function CamerasView({
                   />
                 </label>
                 <p className="muted form-note">
-                  Se deixar em branco, o sistema gera uma chave automaticamente. Em cameras que
-                  pedem servidor e chave separados, use servidor RTMP + chave mostrados na lista.
+                  O padrão de publicação é sempre rtmp://IP:1935/live/CHAVE. Ao editar esta chave,
+                  atualize também o destino configurado na câmera. Se deixar em branco no cadastro,
+                  o sistema gera uma chave automaticamente.
                 </p>
               </>
             ) : null}

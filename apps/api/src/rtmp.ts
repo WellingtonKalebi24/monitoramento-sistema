@@ -175,7 +175,7 @@ export function startRtmpServer() {
 }
 
 function normalizedRtmpPathPrefix() {
-  return env.RTMP_PATH_PREFIX.trim().replace(/^\/+|\/+$/g, "");
+  return env.RTMP_PATH_PREFIX.trim().replace(/^\/+|\/+$/g, "") || env.RTMP_APP;
 }
 
 export function buildLocalRtmpUrl(streamKey: string) {

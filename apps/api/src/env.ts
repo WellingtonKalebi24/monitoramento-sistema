@@ -16,7 +16,7 @@ const envSchema = z.object({
     .default("true")
     .transform((value) => value !== "false" && value !== "0"),
   RTMP_APP: z.string().min(1).default("live"),
-  RTMP_PATH_PREFIX: z.string().default(""),
+  RTMP_PATH_PREFIX: z.string().default("live"),
   RTMP_REJECT_INACTIVE_PUBLISH: z
     .string()
     .default("false")

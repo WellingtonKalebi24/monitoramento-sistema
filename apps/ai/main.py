@@ -680,27 +680,23 @@ def rtmp_candidate_urls(rtsp_url: str) -> list[str]:
         path = rtsp_url[len(prefix):].strip("/")
         stream_key = path.split("/")[-1] if path else ""
 
-        # Optional VPS-side normalizer:
-        # camera/DVR keeps publishing to rtmp://IP:1935/live/<key>, while nginx-rtmp
-        # or another local receiver republishes an H.264-friendly stream to
-        # rtmp://127.0.0.1:1935/<normalized-prefix>/<key>. Trying this first lets
-        # high-resolution/main streams be normalized without changing the camera
-        # cadastro or forcing customers to leave RTMP.
-        if (
-            RTMP_NORMALIZED_PATH_PREFIX
-            and stream_key
-            and not path.startswith(f"{RTMP_NORMALIZED_PATH_PREFIX}/")
-        ):
-            candidates.append(prefix + RTMP_NORMALIZED_PATH_PREFIX + "/" + stream_key)
+        def append_candidate(candidate: str) -> None:
+            if candidate not in candidates:
+                candidates.append(candidate)
 
-        candidates.append(rtsp_url)
+        # Publicação externa tem um único padrão: /live/CHAVE. Quando existe um
+        # normalizador na VPS, a IA lê /normalized/CHAVE primeiro, mas esse caminho
+        # nunca é exibido ao cliente nem precisa ser configurado no DVR.
+        if RTMP_NORMALIZED_PATH_PREFIX and stream_key:
+            append_candidate(prefix + RTMP_NORMALIZED_PATH_PREFIX + "/" + stream_key)
 
-        if path.startswith("live/"):
-            alternate = prefix + path[len("live/"):]
-        else:
-            alternate = prefix + "live/" + path
-        if alternate not in candidates:
-            candidates.append(alternate)
+        if stream_key:
+            append_candidate(prefix + "live/" + stream_key)
+
+        # Compatibilidade temporária com cadastros antigos salvos sem /live.
+        append_candidate(rtsp_url)
+        if stream_key:
+            append_candidate(prefix + stream_key)
     else:
         candidates.append(rtsp_url)
 
@@ -769,8 +765,10 @@ def monitor_camera_loop(runtime: CameraRuntime) -> None:
             time.sleep(5)
             continue
 
+        # Um processo ffmpeg aberto não significa que o DVR entregou vídeo. A
+        # câmera só fica online depois do primeiro frame decodificado.
         with runtime.lock:
-            runtime.connected = True
+            runtime.connected = False
             runtime.last_error = None
 
         received_frame = False
@@ -796,10 +794,10 @@ def monitor_camera_loop(runtime: CameraRuntime) -> None:
                             else None
                         )
                         runtime.last_error = (
-                            "RTMP conectado, mas nenhum frame de video foi recebido. "
-                            "Confira se a camera esta enviando video em H.264 para "
-                            "rtmp://IP:1935/live/CHAVE. "
-                            "Na camera, prefira Stream Extra/Substream em H.264 e desative H.265/H.265+."
+                            "Nenhum frame de vídeo RTMP foi recebido. O sistema tentou o fluxo "
+                            "normalizado da VPS e o padrão rtmp://IP:1935/live/CHAVE. "
+                            "Confirme se a chave publicada pela câmera é exatamente a mesma "
+                            "mostrada no cadastro."
                         )
                         if detail:
                             runtime.last_error = f"{runtime.last_error} Detalhe ffmpeg: {detail}"
@@ -812,8 +810,7 @@ def monitor_camera_loop(runtime: CameraRuntime) -> None:
             with runtime.lock:
                 runtime.last_frame_at = now
                 runtime.connected = True
-                if runtime.last_error and "congel" in runtime.last_error.lower():
-                    runtime.last_error = None
+                runtime.last_error = None
             event_to_publish: tuple[int, str | None, float | None, str] | None = None
             with runtime.lock:
                 annotations = list(runtime.annotations)
