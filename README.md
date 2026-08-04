@@ -158,6 +158,10 @@ Em câmeras que pedem os campos separados, configure:
 Em produção, abra/libere a porta TCP `1935` no firewall da VPS e no painel do provedor. A porta
 HTTP `80` usada pelo Caddy não transporta RTMP.
 
+Para usar o **Stream Principal em HEVC/H.265** sem reduzir a resolução, utilize o perfil SRS 6
+descrito em [`docs/SRS_HEVC_RTMP.md`](docs/SRS_HEVC_RTMP.md). O endereço da câmera continua sendo
+`rtmp://IP-DO-SERVIDOR:1935/live/CHAVE`; somente o receptor RTMP da VPS é substituído.
+
 
 ## Clientes e cameras ativas
 

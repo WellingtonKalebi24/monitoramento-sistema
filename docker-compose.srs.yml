@@ -1,0 +1,11 @@
+services:
+  srs:
+    image: ossrs/srs:6.0.184
+    container_name: facial_monitoring_srs
+    restart: unless-stopped
+    ports:
+      - "1935:1935"
+      - "127.0.0.1:1985:1985"
+    volumes:
+      - ./deploy/srs/srs.conf:/usr/local/srs/conf/monitoramento.conf:ro
+    command: ["./objs/srs", "-c", "conf/monitoramento.conf"]

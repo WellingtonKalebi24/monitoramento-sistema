@@ -11,6 +11,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +35,7 @@ FACE_MATCH_MARGIN = max(0.0, float(os.getenv("SFACE_MATCH_MARGIN", "0.08")))
 ANALYSIS_INTERVAL_SECONDS = max(0.05, float(os.getenv("FACE_ANALYSIS_INTERVAL_SECONDS", "0.25")))
 STREAM_FPS = max(1, min(30, int(os.getenv("PREVIEW_STREAM_FPS", "15"))))
 PREVIEW_JPEG_QUALITY = max(45, min(95, int(os.getenv("PREVIEW_JPEG_QUALITY", "82"))))
-RTMP_DECODE_MAX_WIDTH = max(0, min(1920, int(os.getenv("RTMP_DECODE_MAX_WIDTH", "1280"))))
+RTMP_DECODE_MAX_WIDTH = max(0, min(1920, int(os.getenv("RTMP_DECODE_MAX_WIDTH", "1920"))))
 DETECTION_CLIP_SECONDS = max(0.2, float(os.getenv("DETECTION_CLIP_SECONDS", "3")))
 DETECTION_CLIP_FPS = max(1, min(15, int(os.getenv("DETECTION_CLIP_FPS", "8"))))
 DETECTION_CLIP_MAX_WIDTH = max(160, min(1280, int(os.getenv("DETECTION_CLIP_MAX_WIDTH", "640"))))
@@ -42,6 +43,7 @@ RTMP_CAPTURE_BACKEND = os.getenv("RTMP_CAPTURE_BACKEND", "ffmpeg").lower()
 RTMP_FIRST_FRAME_TIMEOUT_SECONDS = max(6.0, float(os.getenv("RTMP_FIRST_FRAME_TIMEOUT_SECONDS", "30")))
 RTMP_FRAME_TIMEOUT_SECONDS = max(3.0, float(os.getenv("RTMP_FRAME_TIMEOUT_SECONDS", "10")))
 RTMP_NORMALIZED_PATH_PREFIX = os.getenv("RTMP_NORMALIZED_PATH_PREFIX", "").strip().strip("/")
+RTMP_ENHANCED_CODECS = os.getenv("RTMP_ENHANCED_CODECS", "hvc1").strip()
 FACE_MODEL_NAME = "opencv_sface_2021dec_v1"
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -144,6 +146,38 @@ webcam_locks: dict[int, threading.Lock] = {}
 webcam_locks_guard = threading.Lock()
 
 
+@lru_cache(maxsize=1)
+def ffmpeg_rtmp_enhanced_input_args() -> tuple[str, ...]:
+    """Advertise HEVC support when the installed FFmpeg understands Enhanced RTMP.
+
+    FFmpeg changed the option name while Enhanced RTMP support matured. Detecting
+    the installed variant keeps Ubuntu package upgrades backward compatible and
+    leaves H.264 streams working on installations without either option.
+    """
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None or not RTMP_ENHANCED_CODECS:
+        return ()
+
+    try:
+        result = subprocess.run(
+            [ffmpeg, "-hide_banner", "-h", "protocol=rtmp"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ()
+
+    help_text = f"{result.stdout}\n{result.stderr}"
+    if "rtmp_enhanced_codecs" in help_text:
+        return ("-rtmp_enhanced_codecs", RTMP_ENHANCED_CODECS)
+    if "rtmp_enhanced_flags" in help_text:
+        return ("-rtmp_enhanced_flags", "hevc")
+    return ()
+
+
 class FfmpegMjpegCapture:
     """Read RTMP streams through ffmpeg and expose a VideoCapture-like API.
 
@@ -187,6 +221,7 @@ class FfmpegMjpegCapture:
             "low_delay",
             "-rtmp_live",
             "live",
+            *ffmpeg_rtmp_enhanced_input_args(),
             "-i",
             self.url,
             "-an",
@@ -916,7 +951,14 @@ def startup_event() -> None:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "faceModel": FACE_MODEL_NAME}
+    enhanced_args = ffmpeg_rtmp_enhanced_input_args()
+    return {
+        "status": "ok",
+        "faceModel": FACE_MODEL_NAME,
+        "rtmpEnhancedHevc": bool(enhanced_args),
+        "rtmpEnhancedOption": enhanced_args[0] if enhanced_args else None,
+        "rtmpDecodeMaxWidth": RTMP_DECODE_MAX_WIDTH,
+    }
 
 
 @app.get("/status")
