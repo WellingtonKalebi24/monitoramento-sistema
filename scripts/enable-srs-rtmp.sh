@@ -8,6 +8,22 @@ fi
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${project_dir}"
+services_stopped=0
+
+restore_services_on_failure() {
+  local status="$?"
+  trap - EXIT
+
+  if [[ "${status}" -ne 0 && "${services_stopped}" -eq 1 ]]; then
+    echo "A instalação falhou; restaurando API e IA para preservar o login..." >&2
+    pm2 restart facial-api facial-ai facial-web --update-env 2>/dev/null || true
+    pm2 save 2>/dev/null || true
+  fi
+
+  exit "${status}"
+}
+
+trap restore_services_on_failure EXIT
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Docker não está instalado na VPS." >&2
@@ -35,8 +51,17 @@ set_env() {
   fi
 }
 
+set_env RTMP_SERVER_ENABLED false
+set_env RTMP_PATH_PREFIX live
+set_env NEXT_PUBLIC_RTMP_PATH_PREFIX live
+set_env RTMP_NORMALIZED_PATH_PREFIX ""
+set_env RTMP_ENHANCED_CODECS hvc1
+set_env RTMP_DECODE_MAX_WIDTH 1920
+set_env RTMP_CAPTURE_BACKEND ffmpeg
+
 echo "Desativando somente o receptor RTMP antigo do Nginx..."
 pm2 stop facial-ai facial-api 2>/dev/null || true
+services_stopped=1
 
 # O exec_push do nginx-rtmp pode deixar processos filhos tentando reconectar.
 # A IA está parada neste ponto, portanto estes processos pertencem ao receptor antigo.
@@ -58,14 +83,6 @@ if ss -lntp | grep -q ':1935'; then
   ss -lntp | grep ':1935' >&2
   exit 1
 fi
-
-set_env RTMP_SERVER_ENABLED false
-set_env RTMP_PATH_PREFIX live
-set_env NEXT_PUBLIC_RTMP_PATH_PREFIX live
-set_env RTMP_NORMALIZED_PATH_PREFIX ""
-set_env RTMP_ENHANCED_CODECS hvc1
-set_env RTMP_DECODE_MAX_WIDTH 1920
-set_env RTMP_CAPTURE_BACKEND ffmpeg
 
 echo "Subindo receptor SRS com suporte a HEVC/H.265..."
 docker compose -f docker-compose.srs.yml pull
@@ -89,8 +106,10 @@ npm run db:migrate --workspace @facial/api
 npm run build
 pm2 restart facial-api facial-ai facial-web --update-env
 pm2 save
+services_stopped=0
 
 echo "Validando SRS e IA..."
+curl --fail --silent --show-error http://127.0.0.1:4000/health >/dev/null
 for attempt in {1..30}; do
   if health_response="$(curl --fail --silent http://127.0.0.1:8000/health 2>/dev/null)"; then
     echo "${health_response}"

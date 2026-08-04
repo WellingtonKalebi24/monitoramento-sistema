@@ -200,6 +200,31 @@ const rtmpHost = process.env.NEXT_PUBLIC_RTMP_HOST;
 const rtmpPort = process.env.NEXT_PUBLIC_RTMP_PORT ?? "1935";
 const rtmpPathPrefix = process.env.NEXT_PUBLIC_RTMP_PATH_PREFIX ?? "";
 
+async function jsonResponse<T>(response: Response): Promise<T> {
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  const responseText = await response.text();
+  let payload: { message?: string } & Record<string, unknown>;
+
+  try {
+    payload = responseText ? JSON.parse(responseText) : {};
+  } catch {
+    const serviceMessage =
+      response.status >= 500
+        ? "A API está temporariamente indisponível. Verifique o serviço facial-api na VPS."
+        : "O servidor respondeu com uma página inválida no lugar da API.";
+    throw new Error(`${serviceMessage} (HTTP ${response.status})`);
+  }
+
+  if (!response.ok) {
+    throw new Error(payload.message ?? `Erro ${response.status}`);
+  }
+
+  return payload as T;
+}
+
 async function fileToDataUrl(file: File) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -345,16 +370,7 @@ export default function AppPage() {
       }
     });
 
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
-      throw new Error(payload.message ?? `Erro ${response.status}`);
-    }
-
-    if (response.status === 204) {
-      return undefined as T;
-    }
-
-    return response.json();
+    return jsonResponse<T>(response);
   }
 
   function trackAccessEventNotifications(events: AccessEvent[]) {
@@ -500,11 +516,7 @@ export default function AppPage() {
           password: form.get("password")
         })
       });
-      const payload = await response.json();
-
-      if (!response.ok) {
-        throw new Error(payload.message ?? "Falha no login");
-      }
+      const payload = await jsonResponse<{ token: string; user: User }>(response);
 
       window.localStorage.setItem("facial-token", payload.token);
       window.localStorage.setItem("facial-user", JSON.stringify(payload.user));
