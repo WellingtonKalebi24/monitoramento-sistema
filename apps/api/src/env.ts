@@ -23,6 +23,7 @@ const envSchema = z.object({
     .transform((value) => value === "true" || value === "1"),
   JWT_SECRET: z.string().min(16).default("troque-esta-chave-em-producao"),
   INTERNAL_API_KEY: z.string().min(1).default("local-internal-key"),
+  TELEGRAM_BOT_TOKEN: z.string().default(""),
   TELEGRAM_ALERT_BOT_TOKEN: z.string().default(""),
   TELEGRAM_CHAT_ID: z.string().default(""),
   SMTP_HOST: z.string().default(""),

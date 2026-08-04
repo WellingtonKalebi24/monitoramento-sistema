@@ -11,6 +11,20 @@ type TelegramAlertInput = {
   anomaly?: string | null;
 };
 
+function telegramBotToken() {
+  return env.TELEGRAM_ALERT_BOT_TOKEN || env.TELEGRAM_BOT_TOKEN;
+}
+
+function telegramApiUrl(method: string, query?: Record<string, string>) {
+  const url = new URL(`https://api.telegram.org/bot${telegramBotToken()}/${method}`);
+
+  for (const [key, value] of Object.entries(query ?? {})) {
+    url.searchParams.set(key, value);
+  }
+
+  return url;
+}
+
 function filenameFromUrl(url: string) {
   try {
     return new URL(url).pathname.split("/").filter(Boolean).at(-1) ?? "deteccao.jpg";
@@ -35,7 +49,7 @@ function mediaKind(url: string) {
 
 async function postTelegramJson(endpoint: string, body: Record<string, unknown>) {
   const response = await fetch(
-    `https://api.telegram.org/bot${env.TELEGRAM_ALERT_BOT_TOKEN}/${endpoint}`,
+    telegramApiUrl(endpoint),
     {
       method: "POST",
       headers: {
@@ -69,7 +83,7 @@ async function postTelegramMedia(chatId: string, snapshotUrl: string, caption: s
   form.append(kind.field, media, filenameFromUrl(snapshotUrl));
 
   const telegramResponse = await fetch(
-    `https://api.telegram.org/bot${env.TELEGRAM_ALERT_BOT_TOKEN}/${kind.endpoint}`,
+    telegramApiUrl(kind.endpoint),
     {
       method: "POST",
       body: form
@@ -85,7 +99,7 @@ async function postTelegramMedia(chatId: string, snapshotUrl: string, caption: s
 }
 
 export async function sendTelegramText(chatId: string, text: string) {
-  if (!env.TELEGRAM_ALERT_BOT_TOKEN || !chatId) {
+  if (!telegramBotToken() || !chatId) {
     throw new Error("Bot de alerta ou chat do Telegram não configurado.");
   }
 
@@ -98,7 +112,7 @@ export async function sendTelegramText(chatId: string, text: string) {
 export async function sendTelegramAlert(input: TelegramAlertInput) {
   const chatId = input.chatId || env.TELEGRAM_CHAT_ID;
 
-  if (!env.TELEGRAM_ALERT_BOT_TOKEN || !chatId || !input.employeeName) {
+  if (!telegramBotToken() || !chatId || !input.employeeName) {
     return;
   }
 
@@ -159,22 +173,24 @@ type TelegramUpdate = {
   };
 };
 
-async function telegramRequest<T>(method: string) {
-  if (!env.TELEGRAM_ALERT_BOT_TOKEN) {
+async function telegramRequest<T>(method: string, query?: Record<string, string>) {
+  if (!telegramBotToken()) {
     throw new Error("Bot de alerta do Telegram não configurado.");
   }
 
-  const response = await fetch(
-    `https://api.telegram.org/bot${env.TELEGRAM_ALERT_BOT_TOKEN}/${method}`
-  );
-  const payload = (await response.json()) as {
+  const response = await fetch(telegramApiUrl(method, query), {
+    signal: AbortSignal.timeout(12_000)
+  });
+  const payload = (await response.json().catch(() => null)) as {
     ok: boolean;
     result?: T;
     description?: string;
-  };
+  } | null;
 
-  if (!response.ok || !payload.ok || payload.result == null) {
-    throw new Error(payload.description ?? "Falha ao consultar o Telegram.");
+  if (!response.ok || !payload?.ok || payload.result == null) {
+    throw new Error(
+      payload?.description ?? `Falha ao consultar o Telegram (HTTP ${response.status}).`
+    );
   }
 
   return payload.result;
@@ -194,7 +210,20 @@ export async function buildTelegramConnectLink(payloadId: string) {
 }
 
 export async function findTelegramChatId(payloadId: string) {
-  const updates = await telegramRequest<TelegramUpdate[]>("getUpdates");
+  const webhook = await telegramRequest<{ url?: string }>("getWebhookInfo");
+
+  if (webhook.url) {
+    await telegramRequest<boolean>("deleteWebhook", {
+      drop_pending_updates: "false"
+    });
+  }
+
+  const updates = await telegramRequest<TelegramUpdate[]>("getUpdates", {
+    offset: "-100",
+    limit: "100",
+    timeout: "0",
+    allowed_updates: JSON.stringify(["message"])
+  });
   const command = `/start ${payloadId}`;
   const matchedUpdate = [...updates]
     .reverse()

@@ -1653,6 +1653,11 @@ export async function registerRoutes(app: FastifyInstance) {
         });
       }
 
+      await sendTelegramText(
+        chatId,
+        "✅ Telegram conectado ao MEIP. Este contato já pode receber alertas do sistema."
+      );
+
       await pool.query(
         `
           UPDATE tenant_notification_contacts

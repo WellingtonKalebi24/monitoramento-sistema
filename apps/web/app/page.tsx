@@ -1352,9 +1352,8 @@ function NotificationsView({
       setPendingId(contactId);
       const link = await onGetTelegramLink(contactId);
       setTelegramLinks((current) => ({ ...current, [contactId]: link }));
-      window.open(link.link, "_blank", "noopener,noreferrer");
       setLocalMessage(
-        `Abra o Telegram no celular do responsável, toque em Iniciar no bot @${link.botUsername} e volte para verificar.`
+        `Link gerado. Clique em Abrir bot, toque em Iniciar no @${link.botUsername} e depois em Já iniciei — verificar.`
       );
     } catch (error) {
       setLocalMessage(error instanceof Error ? error.message : "Falha ao conectar Telegram.");
@@ -1574,14 +1573,22 @@ function NotificationsView({
                           Conectar Telegram
                         </button>
                         {telegramLinks[contact.id] ? (
-                          <button
-                            className="ghost"
-                            disabled={pendingId === contact.id}
-                            onClick={() => verifyTelegram(contact.id)}
+                          <a
+                            className="button-link ghost"
+                            href={telegramLinks[contact.id].link}
+                            target="_blank"
+                            rel="noreferrer"
                           >
-                            Verificar conexão
-                          </button>
+                            Abrir bot
+                          </a>
                         ) : null}
+                        <button
+                          className="ghost"
+                          disabled={pendingId === contact.id}
+                          onClick={() => verifyTelegram(contact.id)}
+                        >
+                          Já iniciei — verificar
+                        </button>
                       </>
                     ) : contact.notifyEmail ? (
                       <button
