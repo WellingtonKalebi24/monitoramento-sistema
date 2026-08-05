@@ -1348,22 +1348,15 @@ function NotificationsView({
   }
 
   async function connectTelegram(contactId: string) {
-    const popup = window.open("about:blank", "_blank");
-
     try {
       setPendingId(contactId);
       const link = await onGetTelegramLink(contactId);
       setTelegramLinks((current) => ({ ...current, [contactId]: link }));
-
-      if (popup) {
-        popup.location.href = link.link;
-      }
-
       setLocalMessage(
-        `Bot @${link.botUsername} aberto. Toque em Iniciar; a conexão será reconhecida automaticamente em alguns segundos.`
+        `Abrindo o bot @${link.botUsername}. Toque em Iniciar; a conexão será reconhecida automaticamente em alguns segundos.`
       );
+      window.location.assign(link.link);
     } catch (error) {
-      popup?.close();
       setLocalMessage(error instanceof Error ? error.message : "Falha ao conectar Telegram.");
     } finally {
       setPendingId(null);
