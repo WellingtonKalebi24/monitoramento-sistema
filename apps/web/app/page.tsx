@@ -1348,14 +1348,22 @@ function NotificationsView({
   }
 
   async function connectTelegram(contactId: string) {
+    const popup = window.open("about:blank", "_blank");
+
     try {
       setPendingId(contactId);
       const link = await onGetTelegramLink(contactId);
       setTelegramLinks((current) => ({ ...current, [contactId]: link }));
+
+      if (popup) {
+        popup.location.href = link.link;
+      }
+
       setLocalMessage(
-        `Link gerado. Clique em Abrir bot, toque em Iniciar no @${link.botUsername} e depois em Já iniciei — verificar.`
+        `Bot @${link.botUsername} aberto. Toque em Iniciar; a conexão será reconhecida automaticamente em alguns segundos.`
       );
     } catch (error) {
+      popup?.close();
       setLocalMessage(error instanceof Error ? error.message : "Falha ao conectar Telegram.");
     } finally {
       setPendingId(null);
@@ -1570,7 +1578,7 @@ function NotificationsView({
                           disabled={pendingId === contact.id}
                           onClick={() => connectTelegram(contact.id)}
                         >
-                          Conectar Telegram
+                          {pendingId === contact.id ? "Abrindo..." : "Conectar Telegram"}
                         </button>
                         {telegramLinks[contact.id] ? (
                           <a
@@ -1587,7 +1595,7 @@ function NotificationsView({
                           disabled={pendingId === contact.id}
                           onClick={() => verifyTelegram(contact.id)}
                         >
-                          Já iniciei — verificar
+                          Atualizar conexão
                         </button>
                       </>
                     ) : contact.notifyEmail ? (

@@ -52,6 +52,7 @@ async function postTelegramJson(endpoint: string, body: Record<string, unknown>)
     telegramApiUrl(endpoint),
     {
       method: "POST",
+      signal: AbortSignal.timeout(15_000),
       headers: {
         "content-type": "application/json"
       },
@@ -69,7 +70,9 @@ async function postTelegramJson(endpoint: string, body: Record<string, unknown>)
 
 async function postTelegramMedia(chatId: string, snapshotUrl: string, caption: string) {
   const kind = mediaKind(snapshotUrl);
-  const response = await fetch(snapshotUrl);
+  const response = await fetch(snapshotUrl, {
+    signal: AbortSignal.timeout(20_000)
+  });
 
   if (!response.ok) {
     throw new Error(`Falha ao baixar mídia da detecção: HTTP ${response.status}`);
@@ -86,6 +89,7 @@ async function postTelegramMedia(chatId: string, snapshotUrl: string, caption: s
     telegramApiUrl(kind.endpoint),
     {
       method: "POST",
+      signal: AbortSignal.timeout(30_000),
       body: form
     }
   );
@@ -173,13 +177,28 @@ type TelegramUpdate = {
   };
 };
 
-async function telegramRequest<T>(method: string, query?: Record<string, string>) {
+export type TelegramBotUpdate = TelegramUpdate;
+
+export function telegramIsConfigured() {
+  return Boolean(telegramBotToken());
+}
+
+export function telegramStartPayload(text?: string) {
+  const match = text?.trim().match(/^\/start(?:@[a-z0-9_]+)?(?:\s+([^\s]+))?$/i);
+  return match?.[1] ?? null;
+}
+
+export async function telegramRequest<T>(
+  method: string,
+  query?: Record<string, string>,
+  timeoutMs = 12_000
+) {
   if (!telegramBotToken()) {
     throw new Error("Bot de alerta do Telegram não configurado.");
   }
 
   const response = await fetch(telegramApiUrl(method, query), {
-    signal: AbortSignal.timeout(12_000)
+    signal: AbortSignal.timeout(timeoutMs)
   });
   const payload = (await response.json().catch(() => null)) as {
     ok: boolean;
@@ -207,28 +226,4 @@ export async function buildTelegramConnectLink(payloadId: string) {
     link: `https://t.me/${bot.username}?start=${payloadId}`,
     botUsername: bot.username
   };
-}
-
-export async function findTelegramChatId(payloadId: string) {
-  const webhook = await telegramRequest<{ url?: string }>("getWebhookInfo");
-
-  if (webhook.url) {
-    await telegramRequest<boolean>("deleteWebhook", {
-      drop_pending_updates: "false"
-    });
-  }
-
-  const updates = await telegramRequest<TelegramUpdate[]>("getUpdates", {
-    offset: "-100",
-    limit: "100",
-    timeout: "0",
-    allowed_updates: JSON.stringify(["message"])
-  });
-  const command = `/start ${payloadId}`;
-  const matchedUpdate = [...updates]
-    .reverse()
-    .find((update) => update.message?.text?.trim() === command);
-  const chatId = matchedUpdate?.message?.chat?.id;
-
-  return chatId == null ? null : String(chatId);
 }

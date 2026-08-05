@@ -10,7 +10,6 @@ import { removeStoredFace, saveFaceDataUrl } from "./files.js";
 import { buildLocalRtmpUrl, normalizeRtmpStreamKey } from "./rtmp.js";
 import {
   buildTelegramConnectLink,
-  findTelegramChatId,
   sendTelegramAlert,
   sendTelegramText
 } from "./telegram.js";
@@ -1644,28 +1643,22 @@ export async function registerRoutes(app: FastifyInstance) {
     }
 
     try {
-      const chatId = await findTelegramChatId(`contact_${params.id}`);
+      const connectedContact = await pool.query<{ telegram_chat_id: string | null }>(
+        `
+          SELECT telegram_chat_id
+          FROM tenant_notification_contacts
+          WHERE id = $1 AND tenant_id = $2
+        `,
+        [params.id, tenantId]
+      );
+      const chatId = connectedContact.rows[0]?.telegram_chat_id;
 
       if (!chatId) {
         return reply.status(404).send({
           message:
-            "Ainda não encontrei a conexão. Abra o link do Telegram e toque em Iniciar."
+            "Ainda aguardando o Telegram. Abra o bot pelo link, toque em Iniciar e aguarde alguns segundos."
         });
       }
-
-      await sendTelegramText(
-        chatId,
-        "✅ Telegram conectado ao MEIP. Este contato já pode receber alertas do sistema."
-      );
-
-      await pool.query(
-        `
-          UPDATE tenant_notification_contacts
-          SET telegram_chat_id = $3
-          WHERE id = $1 AND tenant_id = $2
-        `,
-        [params.id, tenantId, chatId]
-      );
 
       return { connected: true, message: "Telegram conectado com sucesso." };
     } catch (error) {
