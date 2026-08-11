@@ -533,6 +533,34 @@ button.danger {
   justify-content: flex-start;
 }
 
+.telegram-link-panel {
+  width: min(100%, 440px);
+  padding: 14px;
+  border: 1px solid rgba(96, 165, 250, 0.35);
+  border-radius: 14px;
+  background: rgba(30, 64, 175, 0.12);
+  text-align: left;
+}
+
+.telegram-link-panel p,
+.telegram-link-panel small {
+  display: block;
+  margin: 7px 0;
+  color: #bfdbfe;
+  line-height: 1.45;
+}
+
+.telegram-link-panel input {
+  width: 100%;
+  margin: 5px 0 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8rem;
+}
+
+.telegram-link-actions {
+  justify-content: flex-start;
+}
+
 .status-line {
   display: flex;
   flex-wrap: wrap;

@@ -1353,14 +1353,36 @@ function NotificationsView({
       const link = await onGetTelegramLink(contactId);
       setTelegramLinks((current) => ({ ...current, [contactId]: link }));
       setLocalMessage(
-        `Abrindo o bot @${link.botUsername}. Toque em Iniciar; a conexão será reconhecida automaticamente em alguns segundos.`
+        `Link do @${link.botUsername} gerado. Use Abrir Telegram ou copie o link e abra no navegador.`
       );
-      window.location.assign(link.link);
     } catch (error) {
       setLocalMessage(error instanceof Error ? error.message : "Falha ao conectar Telegram.");
     } finally {
       setPendingId(null);
     }
+  }
+
+  async function copyTelegramLink(contactId: string) {
+    const link = telegramLinks[contactId]?.link;
+
+    if (!link) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(link);
+    } catch {
+      const textArea = document.createElement("textarea");
+      textArea.value = link;
+      textArea.style.position = "fixed";
+      textArea.style.opacity = "0";
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand("copy");
+      textArea.remove();
+    }
+
+    setLocalMessage("Link do Telegram copiado. Cole no Chrome ou diretamente no Telegram.");
   }
 
   async function verifyTelegram(contactId: string) {
@@ -1571,17 +1593,42 @@ function NotificationsView({
                           disabled={pendingId === contact.id}
                           onClick={() => connectTelegram(contact.id)}
                         >
-                          {pendingId === contact.id ? "Abrindo..." : "Conectar Telegram"}
+                          {pendingId === contact.id ? "Gerando..." : "Gerar link do Telegram"}
                         </button>
                         {telegramLinks[contact.id] ? (
-                          <a
-                            className="button-link ghost"
-                            href={telegramLinks[contact.id].link}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Abrir bot
-                          </a>
+                          <div className="telegram-link-panel">
+                            <strong>Link pronto para @{telegramLinks[contact.id].botUsername}</strong>
+                            <p>
+                              Abra o bot, toque em <b>Iniciar</b> e aguarde a confirmação.
+                            </p>
+                            <input
+                              aria-label="Link para conectar o Telegram"
+                              readOnly
+                              value={telegramLinks[contact.id].link}
+                              onFocus={(event) => event.currentTarget.select()}
+                            />
+                            <div className="row-actions telegram-link-actions">
+                              <a
+                                className="button-link"
+                                href={telegramLinks[contact.id].link}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Abrir Telegram
+                              </a>
+                              <button
+                                className="ghost"
+                                type="button"
+                                onClick={() => copyTelegramLink(contact.id)}
+                              >
+                                Copiar link
+                              </button>
+                            </div>
+                            <small>
+                              Se o navegador não abrir, copie o link e cole no Chrome do celular ou
+                              computador.
+                            </small>
+                          </div>
                         ) : null}
                         <button
                           className="ghost"
