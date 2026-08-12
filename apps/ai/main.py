@@ -32,8 +32,9 @@ INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "local-internal-key")
 COOLDOWN_SECONDS = int(os.getenv("DETECTION_COOLDOWN_SECONDS", "20"))
 FACE_MATCH_THRESHOLD = float(os.getenv("SFACE_MATCH_THRESHOLD", "0.45"))
 FACE_MATCH_MARGIN = max(0.0, float(os.getenv("SFACE_MATCH_MARGIN", "0.08")))
-ANALYSIS_INTERVAL_SECONDS = max(0.05, float(os.getenv("FACE_ANALYSIS_INTERVAL_SECONDS", "0.25")))
-STREAM_FPS = max(1, min(30, int(os.getenv("PREVIEW_STREAM_FPS", "15"))))
+ANALYSIS_INTERVAL_SECONDS = max(0.05, float(os.getenv("FACE_ANALYSIS_INTERVAL_SECONDS", "0.4")))
+STREAM_FPS = max(1, min(30, int(os.getenv("PREVIEW_STREAM_FPS", "8"))))
+RTMP_CAPTURE_FPS = max(1, min(15, int(os.getenv("RTMP_CAPTURE_FPS", "8"))))
 PREVIEW_JPEG_QUALITY = max(45, min(95, int(os.getenv("PREVIEW_JPEG_QUALITY", "82"))))
 RTMP_DECODE_MAX_WIDTH = max(0, min(1920, int(os.getenv("RTMP_DECODE_MAX_WIDTH", "1920"))))
 DETECTION_CLIP_SECONDS = max(0.2, float(os.getenv("DETECTION_CLIP_SECONDS", "3")))
@@ -127,7 +128,11 @@ class CameraRuntime:
     lock: threading.Lock = field(default_factory=threading.Lock)
     latest_frame: Any = None
     latest_snapshot_path: Path | None = None
-    frame_buffer: Any = field(default_factory=lambda: deque(maxlen=120))
+    frame_buffer: Any = field(
+        default_factory=lambda: deque(
+            maxlen=max(4, int(DETECTION_CLIP_SECONDS * DETECTION_CLIP_FPS * 2) + 4)
+        )
+    )
     connected: bool = False
     face_count: int = 0
     last_error: str | None = None
@@ -135,6 +140,8 @@ class CameraRuntime:
     annotations: list[tuple[int, int, int, int, tuple[int, int, int], str]] = field(default_factory=list)
     last_analysis_at: float = 0.0
     last_frame_at: float = 0.0
+    latest_preview_at: float = 0.0
+    last_clip_frame_at: float = 0.0
     running: bool = False
     active: bool = True
 
@@ -199,7 +206,7 @@ class FfmpegMjpegCapture:
         if ffmpeg is None:
             return
 
-        video_filters = [f"fps={STREAM_FPS}"]
+        video_filters = [f"fps={RTMP_CAPTURE_FPS}"]
         if RTMP_DECODE_MAX_WIDTH > 0:
             # Keep the main-stream quality useful for face recognition, but avoid
             # decoding/sending unnecessarily huge JPEG frames to the browser.
@@ -895,7 +902,19 @@ def monitor_camera_loop(runtime: CameraRuntime) -> None:
 
             with runtime.lock:
                 runtime.latest_frame = displayed_frame
-                runtime.frame_buffer.append((now, displayed_frame.copy()))
+                runtime.latest_preview_at = now
+                should_buffer_clip = (
+                    now - runtime.last_clip_frame_at >= 1 / DETECTION_CLIP_FPS
+                )
+                if should_buffer_clip:
+                    runtime.last_clip_frame_at = now
+
+            if should_buffer_clip:
+                clip_frame = resize_clip_frame(displayed_frame)
+                with runtime.lock:
+                    runtime.frame_buffer.append((now, clip_frame.copy()))
+
+            with runtime.lock:
                 while (
                     runtime.frame_buffer
                     and runtime.frame_buffer[0][0] < now - (DETECTION_CLIP_SECONDS * 2)
@@ -920,16 +939,21 @@ def supervisor_loop() -> None:
 
 
 def frame_generator(camera_id: str):
+    last_preview_at = 0.0
+
     while True:
         runtime = camera_states.get(camera_id)
         frame = None
+        preview_at = 0.0
 
         if runtime:
             with runtime.lock:
-                frame = None if runtime.latest_frame is None else runtime.latest_frame.copy()
+                preview_at = runtime.latest_preview_at
+                if preview_at > last_preview_at and runtime.latest_frame is not None:
+                    frame = runtime.latest_frame.copy()
 
         if frame is None:
-            time.sleep(0.1)
+            time.sleep(0.03)
             continue
 
         ok, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), PREVIEW_JPEG_QUALITY])
@@ -940,6 +964,7 @@ def frame_generator(camera_id: str):
             b"--frame\r\n"
             b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
         )
+        last_preview_at = preview_at
         time.sleep(1 / STREAM_FPS)
 
 
@@ -958,6 +983,7 @@ def health():
         "rtmpEnhancedHevc": bool(enhanced_args),
         "rtmpEnhancedOption": enhanced_args[0] if enhanced_args else None,
         "rtmpDecodeMaxWidth": RTMP_DECODE_MAX_WIDTH,
+        "rtmpCaptureFps": RTMP_CAPTURE_FPS,
     }
 
 

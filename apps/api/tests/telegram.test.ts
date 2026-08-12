@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { telegramStartPayload } from "../src/telegram.js";
+import { normalizeTelegramToken, telegramStartPayload } from "../src/telegram.js";
+
+describe("normalizeTelegramToken", () => {
+  it("accepts tokens copied with quotes or the bot prefix", () => {
+    expect(normalizeTelegramToken('"bot123456789:abcdefghijklmnopqrstuvwxyz_123"')).toBe(
+      "123456789:abcdefghijklmnopqrstuvwxyz_123"
+    );
+  });
+});
 
 describe("telegramStartPayload", () => {
   it("extracts the contact payload from a private bot start command", () => {

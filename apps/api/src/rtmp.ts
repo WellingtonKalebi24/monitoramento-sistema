@@ -12,6 +12,7 @@ const NodeMediaServer = require("node-media-server") as new (config: unknown) =>
 };
 
 let started = false;
+const rejectionLogTimes = new Map<string, number>();
 
 type RtmpSession = {
   id?: string;
@@ -25,7 +26,15 @@ type RtmpSession = {
 };
 
 function closePublish(session: RtmpSession, reason: string) {
-  console.warn(`[rtmp] publish rejected ${session.streamPath ?? ""}: ${reason}`);
+  const streamPath = session.streamPath ?? "";
+  const logKey = `${streamPath}:${reason}`;
+  const now = Date.now();
+  const lastLoggedAt = rejectionLogTimes.get(logKey) ?? 0;
+
+  if (now - lastLoggedAt >= 30_000) {
+    console.warn(`[rtmp] publish rejected ${streamPath}: ${reason}`);
+    rejectionLogTimes.set(logKey, now);
+  }
 
   if (typeof session.close === "function") {
     session.close();

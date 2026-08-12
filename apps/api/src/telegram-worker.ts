@@ -86,12 +86,17 @@ async function preparePolling() {
 
 async function pollingLoop(logger: WorkerLogger) {
   let offset: number | undefined;
+  let retryDelayMs = 3_000;
 
   try {
     await preparePolling();
     logger.info("Telegram pronto para conectar responsáveis automaticamente.");
   } catch (error) {
     logger.error(error, "Falha ao preparar o bot do Telegram.");
+
+    if (error instanceof Error && error.message.includes("inválido ou revogado")) {
+      return;
+    }
   }
 
   while (!workerStopped) {
@@ -106,6 +111,7 @@ async function pollingLoop(logger: WorkerLogger) {
         },
         10_000
       );
+      retryDelayMs = 3_000;
 
       for (const update of updates) {
         offset = Math.max(offset ?? 0, update.update_id + 1);
@@ -117,13 +123,34 @@ async function pollingLoop(logger: WorkerLogger) {
         }
       }
     } catch (error) {
-      logger.error(error, "Falha ao consultar novas conexões do Telegram; nova tentativa em 3s.");
-      await wait(3_000);
+      if (error instanceof Error && error.message.includes("inválido ou revogado")) {
+        logger.error(
+          error,
+          "Conexão automática do Telegram pausada. Corrija o token e reinicie facial-api."
+        );
+        return;
+      }
+
+      logger.error(
+        error,
+        `Falha ao consultar novas conexões do Telegram; nova tentativa em ${Math.round(
+          retryDelayMs / 1_000
+        )}s.`
+      );
+      await wait(retryDelayMs);
+      retryDelayMs = Math.min(retryDelayMs * 2, 60_000);
 
       try {
         await preparePolling();
       } catch (prepareError) {
         logger.error(prepareError, "O bot do Telegram ainda não está pronto para receber conexões.");
+
+        if (
+          prepareError instanceof Error &&
+          prepareError.message.includes("inválido ou revogado")
+        ) {
+          return;
+        }
       }
     }
   }
